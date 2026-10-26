@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <hyprland/src/desktop/Workspace.hpp>
+#include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/output/Monitor.hpp>
@@ -197,9 +198,23 @@ static int luaToggle(lua_State*) {
     return 0;
 }
 
-// Returns the action, as hl.dsp.* do, for hl.bind and hyprctl dispatch.
+static int luaHopAction(lua_State* L) {
+    g_canvas.hop(sc<eDirection>(lua_tointeger(L, lua_upvalueindex(1))));
+    return 0;
+}
+
+// These return the action, as hl.dsp.* do, for hl.bind and hyprctl dispatch.
 static int luaOverview(lua_State* L) {
     lua_pushcfunction(L, luaToggle);
+    return 1;
+}
+
+static int luaHop(lua_State* L) {
+    const auto DIRECTION = parseDirection(luaL_checkstring(L, 1));
+    if (!DIRECTION)
+        return luaL_error(L, "hl.plugin.expanse.hop: expected \"left\", \"right\", \"up\" or \"down\"");
+    lua_pushinteger(L, *DIRECTION);
+    lua_pushcclosure(L, luaHopAction, 1);
     return 1;
 }
 
@@ -219,8 +234,15 @@ static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
         if (!(words >> x >> y))
             return "usage: hyprctl expanse pick <x> <y>\n";
         g_canvas.pickAt({x, y});
+    } else if (verb == "hop") {
+        std::string word;
+        words >> word;
+        const auto DIRECTION = parseDirection(word);
+        if (!DIRECTION)
+            return "usage: hyprctl expanse hop <left|right|up|down>\n";
+        g_canvas.hop(*DIRECTION);
     } else if (!verb.empty() && verb != "state")
-        return "usage: hyprctl expanse [state|toggle|open|close|pick <x> <y>]\n";
+        return "usage: hyprctl expanse [state|toggle|open|close|pick <x> <y>|hop <direction>]\n";
 
     return g_canvas.stateJson();
 }
@@ -259,8 +281,10 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         if (g_canvas.onKey(event.keycode, event.state == WL_KEYBOARD_KEY_STATE_PRESSED))
             info.cancelled = true;
     }));
+    g_listeners.push_back(events.window.active.listen([](PHLWINDOW window, Desktop::eFocusReason reason) { g_canvas.onFocus(window, reason); }));
 
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "overview", luaOverview);
+    HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "hop", luaHop);
     HyprlandAPI::addDispatcherV2(PHANDLE, "expanse:overview", [](std::string) {
         g_canvas.toggle();
         return SDispatchResult{};

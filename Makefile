@@ -1,7 +1,7 @@
 CXX ?= g++
 
 OUT     ?= expanse.so
-SOURCES  = src/main.cpp src/Canvas.cpp
+SOURCES  = src/main.cpp src/Canvas.cpp src/Nearest.cpp
 HEADERS  = $(wildcard src/*.hpp)
 # The Lua Hyprland itself links (5.5 for 0.56), found the way its CMake does.
 LUA_PKG ?= $(shell for p in lua55 lua5.5 lua-55 lua-5.5 lua; do pkg-config --exists "$$p >= 5.5" && echo $$p && break; done)
@@ -23,4 +23,12 @@ $(OUT): $(SOURCES) $(HEADERS)
 	mv -f $@.next $@
 
 clean:
-	rm -f $(OUT) $(OUT).next
+	rm -rf $(OUT) $(OUT).next .build
+
+.PHONY: test
+test: .build/nearest_test
+	.build/nearest_test
+
+.build/nearest_test: tests/nearest_test.cpp src/Nearest.cpp src/Nearest.hpp
+	@mkdir -p .build
+	$(CXX) -std=c++2b -O1 -g tests/nearest_test.cpp src/Nearest.cpp -o $@ `pkg-config --cflags --libs hyprutils`
