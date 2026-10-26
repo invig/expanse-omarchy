@@ -6,18 +6,14 @@
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
-#include <hyprland/src/desktop/view/WLSurface.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/layout/target/Target.hpp>
-#include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/render/Renderer.hpp>
-
-#include <linux/input-event-codes.h>
 
 #include <algorithm>
 #include <cmath>
@@ -28,18 +24,22 @@ namespace Expanse {
 
     using Desktop::View::IGeometric;
 
-    constexpr double OPEN_SECONDS       = 0.32;
-    constexpr double GLIDE_SECONDS      = 0.38; // from zoomed out
-    constexpr double HOP_SECONDS        = 0.30; // at 100%, as on the Mac
-    constexpr double PAN_SECONDS        = 0.25; // zoomed out, following the highlight
-    constexpr double CLOSE_SECONDS      = 0.28;
-    constexpr double OVERVIEW_MARGIN    = 48.0;
-    constexpr double OVERVIEW_MAX_SCALE = 0.9;
-    constexpr double OVERVIEW_MIN_SCALE = 0.05;
-    constexpr double CLICK_SLOP         = 6.0; // logical px a click may move before it's a drag
+    // Timings and limits as on the Mac.
+    constexpr double CAMERA_SECONDS     = 0.22; // zooming out, zoom keys, fit
+    constexpr double DIVE_SECONDS       = 0.18; // from the canvas into a window, or back
+    constexpr double HOP_SECONDS        = 0.30; // at 100%
+    constexpr double PAN_SECONDS        = 0.25; // on the canvas, following the highlight
+    constexpr double OVERVIEW_MAX_SCALE = 0.6;
+    constexpr double FIT_INSET          = 80.0; // canvas px around everything, when fitting
+    constexpr double MIN_SCALE          = 0.03;
+    constexpr double MAX_SCALE          = 1.5;
+    constexpr double TIDY_MARGIN        = 16.0;
+    constexpr double CLOSE_SIZE         = 26.0;
+    constexpr double CLOSE_INSET        = 10.0;
+    constexpr double CLOSE_MIN_WIDTH    = 220.0; // narrower on screen, a window shows no ×
 
-    static double easeInOutCubic(double t) {
-        return t < 0.5 ? 4.0 * t * t * t : 1.0 - std::pow(-2.0 * t + 2.0, 3.0) / 2.0;
+    static double easeOutCubic(double t) {
+        return 1.0 - std::pow(1.0 - t, 3.0);
     }
 
     // Moves the canvas point at the centre of the view in a straight line while
@@ -56,6 +56,11 @@ namespace Expanse {
         return {window->position(IGeometric::GEOMETRIC_CURRENT), window->size(IGeometric::GEOMETRIC_CURRENT)};
     }
 
+    static CBox unite(const CBox& a, const CBox& b) {
+        const double X0 = std::min(a.x, b.x), Y0 = std::min(a.y, b.y);
+        return {X0, Y0, std::max(a.x + a.w, b.x + b.w) - X0, std::max(a.y + a.h, b.y + b.h) - Y0};
+    }
+
     static std::string jsonEscape(const std::string& text) {
         std::string out;
         out.reserve(text.size());
@@ -67,16 +72,6 @@ namespace Expanse {
             out += c;
         }
         return out;
-    }
-
-    // The window whose surface has the pointer, as the seat sees it: a layer
-    // surface or popup on top means no window.
-    static PHLWINDOW windowUnderPointer() {
-        const auto SURFACE = g_pSeatManager->m_state.pointerFocus.lock();
-        if (!SURFACE)
-            return nullptr;
-        const auto WLSURFACE = Desktop::View::CWLSurface::fromResource(SURFACE);
-        return WLSURFACE ? Desktop::View::CWindow::fromView(WLSURFACE->view()) : nullptr;
     }
 
     // Keyboard glides replace Hyprland's movefocus, which carries the pointer
@@ -112,6 +107,8 @@ namespace Expanse {
         return std::nullopt;
     }
 
+    // MARK: Modes
+
     void CCanvas::toggle() {
         switch (m_state) {
             case STATE_IDLE: open(); break;
@@ -129,17 +126,36 @@ namespace Expanse {
         m_monitor   = MONITOR;
         m_workspace = MONITOR->m_activeWorkspace;
         m_target.reset();
+        m_selected.clear();
+        m_drag = {};
+        m_guides.clear();
         floatTiledWindows();
         m_camera = homeCamera();
         return true;
     }
 
     void CCanvas::open() {
+        if (m_state == STATE_OVERVIEW) {
+            animateTo(fitCamera(OVERVIEW_MAX_SCALE), STATE_OVERVIEW, CAMERA_SECONDS);
+            return;
+        }
+        if (live() || !begin())
+            return;
+
+        m_hover        = Desktop::focusState()->window();
+        m_returnCamera = m_camera;
+        animateTo(fitCamera(OVERVIEW_MAX_SCALE), STATE_OPENING, CAMERA_SECONDS);
+    }
+
+    void CCanvas::openAt100() {
         if (live() || !begin())
             return;
 
         m_hover = Desktop::focusState()->window();
-        animateTo(fitCamera(), STATE_OPENING, OPEN_SECONDS);
+        m_returnCamera.reset();
+        m_animating = false;
+        m_state     = STATE_OVERVIEW;
+        damage();
     }
 
     void CCanvas::close() {
@@ -147,33 +163,38 @@ namespace Expanse {
             return;
 
         m_target.reset();
-        animateTo(homeCamera(), STATE_GLIDING, CLOSE_SECONDS);
+        m_selected.clear();
+        // Straight back where you were, unless you've moved around since zooming out.
+        animateTo(m_returnCamera.value_or(centredOn(viewCentre().pos(), 1.0)), STATE_GLIDING, DIVE_SECONDS);
     }
 
     void CCanvas::glideTo(PHLWINDOW window, bool fromKeyboard) {
         if (!window)
             return;
 
-        if (!live() && !begin())
+        const bool FROMIDLE = !live();
+        if (FROMIDLE && !begin())
             return;
 
         if (!isCanvasWindow(window))
             return;
 
+        const double SECONDS = FROMIDLE || m_state == STATE_GLIDING ? HOP_SECONDS : DIVE_SECONDS;
+
         m_target       = window;
         m_hover        = window;
         m_fromKeyboard = fromKeyboard;
+        m_selected.clear();
         // On top for the whole glide, not only once it lands.
-        if (const auto TARGET = window->layoutTarget())
-            g_layoutManager->bringTargetToTop(TARGET);
+        raise(window);
 
-        animateTo(cameraFor(window), STATE_GLIDING, m_camera.scale > 0.99 ? HOP_SECONDS : GLIDE_SECONDS);
+        animateTo(cameraFor(window), STATE_GLIDING, SECONDS);
     }
 
     void CCanvas::glideLater(PHLWINDOW window, bool fromKeyboard) {
         // Out of the event that asked for it: gliding floats and moves windows.
         g_pEventLoopManager->doLater([this, ref = PHLWINDOWREF{window}, fromKeyboard] {
-            if (const auto WINDOW = ref.lock(); WINDOW && !live() && isCanvasWindow(WINDOW) && !fullyVisible(WINDOW))
+            if (const auto WINDOW = ref.lock(); WINDOW && !live() && m_autoCentre && isCanvasWindow(WINDOW) && !fullyVisible(WINDOW))
                 glideTo(WINDOW, fromKeyboard);
         });
     }
@@ -189,13 +210,14 @@ namespace Expanse {
             }
             case STATE_OPENING:
             case STATE_OVERVIEW: {
-                // Zoomed out: the highlight moves and the view follows.
+                // On the canvas: the highlight moves and the view follows.
                 const auto FROM = m_hover.lock();
                 const bool HAS  = FROM && isCanvasWindow(FROM);
                 const auto NEXT = nearest(direction, HAS ? canvasBox(FROM) : viewCentre(), HAS ? FROM : nullptr);
                 if (!NEXT)
                     return;
                 m_hover = NEXT;
+                cameraMovedByUser();
                 animateTo(centredOn(canvasBox(NEXT).middle(), m_animating ? m_to.scale : m_camera.scale), STATE_OVERVIEW, PAN_SECONDS);
                 return;
             }
@@ -209,6 +231,16 @@ namespace Expanse {
                 return;
             }
         }
+    }
+
+    bool CCanvas::pickAt(const Vector2D& pos) {
+        if (m_state != STATE_OVERVIEW && m_state != STATE_OPENING)
+            return false;
+
+        const auto WINDOW = windowAt(pos);
+        if (WINDOW)
+            glideTo(WINDOW);
+        return WINDOW != nullptr;
     }
 
     PHLWINDOW CCanvas::nearest(eDirection direction, const CBox& from, PHLWINDOW exclude) const {
@@ -225,6 +257,8 @@ namespace Expanse {
         return INDEX ? windows[*INDEX] : nullptr;
     }
 
+    // MARK: Camera
+
     void CCanvas::animateTo(const SCamera& to, eState state, double seconds) {
         m_from        = m_camera;
         m_to          = to;
@@ -232,9 +266,64 @@ namespace Expanse {
         m_animSeconds = seconds;
         m_animating   = true;
         m_state       = state;
+        damage();
+    }
 
+    void CCanvas::setCamera(const SCamera& camera) {
+        m_camera       = camera;
+        m_camera.scale = std::clamp(camera.scale, MIN_SCALE, MAX_SCALE);
+        m_animating    = false;
+        if (m_state == STATE_OPENING)
+            m_state = STATE_OVERVIEW;
+        damage();
+    }
+
+    void CCanvas::cameraMovedByUser() {
+        m_returnCamera.reset();
+    }
+
+    void CCanvas::damage() const {
         if (const auto MONITOR = m_monitor.lock())
             g_pHyprRenderer->damageMonitor(MONITOR);
+    }
+
+    void CCanvas::pan(const Vector2D& screenDelta) {
+        if (m_state != STATE_OVERVIEW && m_state != STATE_OPENING)
+            return;
+        cameraMovedByUser();
+        setCamera({m_camera.origin - screenDelta / m_camera.scale, m_camera.scale});
+    }
+
+    void CCanvas::zoomBy(double factor, const Vector2D& anchor) {
+        if (m_state != STATE_OVERVIEW && m_state != STATE_OPENING)
+            return;
+        cameraMovedByUser();
+        setCamera(zoomedAround(m_camera, m_camera.scale * factor, anchor));
+    }
+
+    void CCanvas::zoomTo(double scale) {
+        if (m_state != STATE_OVERVIEW && m_state != STATE_OPENING)
+            return;
+        const auto MONITOR = monitor();
+        if (!MONITOR)
+            return;
+        cameraMovedByUser();
+        const SCamera FROM = m_animating ? m_to : m_camera;
+        animateTo(zoomedAround(FROM, scale, MONITOR->m_position + MONITOR->m_size / 2.0), STATE_OVERVIEW, CAMERA_SECONDS);
+    }
+
+    void CCanvas::fit() {
+        if (m_state != STATE_OVERVIEW && m_state != STATE_OPENING)
+            return;
+        cameraMovedByUser();
+        animateTo(fitCamera(1.0), STATE_OVERVIEW, CAMERA_SECONDS);
+    }
+
+    void CCanvas::centreOn(const Vector2D& canvasPoint) {
+        if (m_state != STATE_OVERVIEW && m_state != STATE_OPENING)
+            return;
+        cameraMovedByUser();
+        setCamera(centredOn(canvasPoint, m_camera.scale));
     }
 
     void CCanvas::onPreRender(PHLMONITOR monitor) {
@@ -245,7 +334,7 @@ namespace Expanse {
             const double ELAPSED = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_animStart).count();
             const double T       = m_animSeconds > 0.0 ? std::clamp(ELAPSED / m_animSeconds, 0.0, 1.0) : 1.0;
 
-            m_camera = mix(m_from, m_to, easeInOutCubic(T), monitor->m_size);
+            m_camera = mix(m_from, m_to, easeOutCubic(T), monitor->m_size);
 
             if (T >= 1.0) {
                 m_camera    = m_to;
@@ -296,20 +385,39 @@ namespace Expanse {
 
         m_camera = homeCamera();
         m_state  = STATE_IDLE;
+        m_drag   = {};
+        m_guides.clear();
+        m_selected.clear();
 
-        if (const auto TARGET = m_target.lock(); TARGET && TARGET->m_isMapped) {
+        const auto TARGET = m_target.lock();
+        if (!TARGET || !TARGET->m_isMapped) {
+            // Back without picking one: the focused window if it's in view,
+            // else the top one that is.
+            const auto FOCUSED = Desktop::focusState()->window();
+            const CBox AREA    = usableArea();
+            const auto SHOWN   = [&](const PHLWINDOW& w) { return !canvasBox(w).intersection(AREA).empty(); };
+            if (!(FOCUSED && isCanvasWindow(FOCUSED) && SHOWN(FOCUSED))) {
+                for (const auto& window : canvasWindows() | std::views::reverse) {
+                    if (SHOWN(window)) {
+                        Desktop::focusState()->fullWindowFocus(window, Desktop::FOCUS_REASON_CLICK);
+                        break;
+                    }
+                }
+            }
+        } else {
             if (m_fromKeyboard)
                 focusLikeMoveFocus(TARGET);
             else
                 Desktop::focusState()->fullWindowFocus(TARGET, Desktop::FOCUS_REASON_CLICK);
-            if (const auto LAYOUTTARGET = TARGET->layoutTarget())
-                g_layoutManager->bringTargetToTop(LAYOUTTARGET);
+            raise(TARGET);
         }
 
         m_target.reset();
         m_hover.reset();
         g_pHyprRenderer->damageMonitor(MONITOR);
     }
+
+    // MARK: Windows
 
     void CCanvas::floatTiledWindows() {
         // Record every tiled box first: floating one window makes the layout
@@ -330,92 +438,128 @@ namespace Expanse {
         }
     }
 
-    bool CCanvas::onMouseMove(const Vector2D& pos) {
-        if (!live())
-            return false;
-
-        const auto HOVER = windowAt(pos);
-        if (HOVER && HOVER != m_hover.lock()) {
-            m_hover = HOVER;
-            if (const auto MONITOR = m_monitor.lock())
-                g_pHyprRenderer->damageMonitor(MONITOR);
-        }
-
-        // Swallowed so apps don't see a pointer over their real, off-view
-        // positions and focus doesn't follow the mouse.
-        return true;
+    void CCanvas::raise(PHLWINDOW window) {
+        Desktop::windowState()->raise(window);
+        if (const auto TARGET = window->layoutTarget())
+            g_layoutManager->bringTargetToTop(TARGET); // the current tab, for a group
     }
 
-    bool CCanvas::onMouseButton(uint32_t button, bool pressed) {
-        if (!live()) {
-            // At 100%, clicking a window that isn't fully on screen centres it.
-            // The click itself goes to the app; a drag (selecting, moving the
-            // window) doesn't count.
-            if (button != BTN_LEFT)
-                return false;
-
-            const auto POS = g_pInputManager->getMouseCoordsInternal();
-            if (pressed)
-                m_press = {POS, windowUnderPointer()};
-            else if (const auto WINDOW = m_press.window.lock(); WINDOW && POS.distance(m_press.pos) <= CLICK_SLOP && !fullyVisible(WINDOW))
-                glideLater(WINDOW, false);
-            return false;
-        }
-
-        if (!pressed || m_state == STATE_GLIDING)
-            return true;
-
-        if (button == BTN_LEFT) {
-            if (const auto WINDOW = windowAt(g_pInputManager->getMouseCoordsInternal()))
-                glideTo(WINDOW);
-            else
-                close();
-        } else if (button == BTN_RIGHT)
-            close();
-
-        return true;
-    }
-
-    bool CCanvas::onKey(uint32_t keycode, bool pressed) {
-        if (!pressed) {
-            const auto IT = std::ranges::find(m_swallowedKeys, keycode);
-            if (IT == m_swallowedKeys.end())
-                return false;
-            m_swallowedKeys.erase(IT);
-            return true;
-        }
-
-        if (!live())
-            return false;
-
-        if (keycode == KEY_ESC)
-            close();
-        else if (keycode == KEY_ENTER || keycode == KEY_KPENTER) {
-            const auto WINDOW = m_hover.lock();
-            if (WINDOW && isCanvasWindow(WINDOW))
-                glideTo(WINDOW, true);
-            else
-                close();
-        } else if (g_pInputManager->getModsFromAllKBs() & (HL_MODIFIER_META | HL_MODIFIER_ALT | HL_MODIFIER_CTRL))
-            return false; // chords stay keybinds: the toggle, hops
-
-        m_swallowedKeys.push_back(keycode);
-        return true;
-    }
-
-    void CCanvas::onFocus(PHLWINDOW window, Desktop::eFocusReason reason) {
-        // Keyboard focus (binds, Alt-Tab, a window closing) centres a window
-        // that isn't fully on screen. Clicks are handled on release; focus
-        // that follows the mouse never moves the canvas.
-        if (live() || reason == Desktop::FOCUS_REASON_FFM || reason == Desktop::FOCUS_REASON_CLICK)
+    void CCanvas::moveWindow(PHLWINDOW window, const Vector2D& canvasPos) {
+        const auto TARGET = window ? window->layoutTarget() : nullptr;
+        if (!TARGET || !TARGET->floating())
             return;
 
-        if (isCanvasWindow(window) && !fullyVisible(window))
-            glideLater(window, true);
+        // The layout box includes the border; keep its offset from the window.
+        CBox       box    = TARGET->position();
+        const auto OFFSET = box.pos() - canvasBox(window).pos();
+        box.x             = std::round(canvasPos.x + OFFSET.x);
+        box.y             = std::round(canvasPos.y + OFFSET.y);
+        g_layoutManager->setTargetGeom(box, TARGET);
+        TARGET->warpPositionSize();
+        damage();
     }
+
+    void CCanvas::tidy() {
+        if (m_state == STATE_GLIDING)
+            return;
+        if (!live()) {
+            openAt100();
+            if (!live())
+                return;
+        }
+
+        const auto WINDOWS = canvasWindows();
+        if (WINDOWS.empty())
+            return;
+
+        // Overlaps apart, each cluster pulled to the standard gap, then apart
+        // again; windows bigger than the screen shrink to fit it first.
+        const CBox        AREA = usableArea();
+        const Vector2D    MAXSIZE{AREA.w - 2 * TIDY_MARGIN, AREA.h - 2 * TIDY_MARGIN};
+        std::vector<CBox> frames;
+        for (const auto& window : WINDOWS) {
+            CBox box = canvasBox(window);
+            if (box.w > MAXSIZE.x || box.h > MAXSIZE.y) {
+                const auto TARGET = window->layoutTarget();
+                if (TARGET && TARGET->floating()) {
+                    CBox layout = TARGET->position();
+                    layout.w -= std::max(0.0, box.w - MAXSIZE.x);
+                    layout.h -= std::max(0.0, box.h - MAXSIZE.y);
+                    g_layoutManager->setTargetGeom(layout, TARGET);
+                    TARGET->warpPositionSize();
+                    box = canvasBox(window);
+                }
+            }
+            frames.push_back(box);
+        }
+
+        Arrange::separate(frames, Arrange::GAP);
+        Arrange::gravity(frames, Arrange::clusters(frames, Arrange::CLUSTER_REACH), Arrange::GAP);
+        Arrange::separate(frames, Arrange::GAP);
+
+        for (size_t i = 0; i < WINDOWS.size(); ++i)
+            moveWindow(WINDOWS[i], frames[i].pos());
+
+        cameraMovedByUser();
+        animateTo(fitCamera(1.0), STATE_OVERVIEW, CAMERA_SECONDS);
+    }
+
+    void CCanvas::selectAll() {
+        if (m_state != STATE_OVERVIEW && m_state != STATE_OPENING)
+            return;
+        m_selected.clear();
+        for (const auto& window : canvasWindows())
+            m_selected.emplace_back(window);
+        damage();
+    }
+
+    void CCanvas::closeWindows(const std::vector<PHLWINDOW>& windows) {
+        // Each window's own close request, so apps ask about unsaved changes as usual.
+        for (const auto& window : windows)
+            if (window)
+                window->sendClose();
+        m_selected.clear();
+        damage();
+    }
+
+    void CCanvas::setAutoCentre(bool on) {
+        m_autoCentre = on;
+    }
+
+    bool CCanvas::autoCentre() const {
+        return m_autoCentre;
+    }
+
+    std::vector<PHLWINDOW> CCanvas::selection() const {
+        std::vector<PHLWINDOW> out;
+        for (const auto& ref : m_selected)
+            if (const auto WINDOW = ref.lock(); WINDOW && isCanvasWindow(WINDOW))
+                out.push_back(WINDOW);
+        return out;
+    }
+
+    void CCanvas::clearSelection() {
+        m_selected.clear();
+        damage();
+    }
+
+    void CCanvas::toggleSelected(PHLWINDOW window) {
+        const auto IT = std::ranges::find_if(m_selected, [&](const PHLWINDOWREF& ref) { return ref.lock() == window; });
+        if (IT != m_selected.end())
+            m_selected.erase(IT);
+        else
+            m_selected.emplace_back(window);
+        damage();
+    }
+
+    // MARK: Queries
 
     bool CCanvas::live() const {
         return m_state != STATE_IDLE;
+    }
+
+    bool CCanvas::showsCanvas() const {
+        return m_state == STATE_OPENING || m_state == STATE_OVERVIEW;
     }
 
     PHLMONITOR CCanvas::monitor() const {
@@ -447,6 +591,47 @@ namespace Expanse {
 
     double CCanvas::zoomedOut() const {
         return live() ? std::clamp((1.0 - m_camera.scale) / 0.25, 0.0, 1.0) : 0.0;
+    }
+
+    double CCanvas::scale() const {
+        return live() ? m_camera.scale : 1.0;
+    }
+
+    bool CCanvas::isSelected(PHLWINDOW window) const {
+        return std::ranges::any_of(m_selected, [&](const PHLWINDOWREF& ref) { return ref.lock() == window; });
+    }
+
+    bool CCanvas::showsClose(PHLWINDOW window) const {
+        // Hovering a window in a selection shows × on every selected window: it closes them all.
+        if (m_state != STATE_OVERVIEW || m_drag.moved || screenBox(window).w < CLOSE_MIN_WIDTH)
+            return false;
+        const auto HOVER = m_hover.lock();
+        if (!HOVER)
+            return false;
+        if (window == HOVER)
+            return true;
+        return selection().size() > 1 && isSelected(HOVER) && isSelected(window);
+    }
+
+    std::optional<CBox> CCanvas::selectionBounds() const {
+        const auto SELECTED = selection();
+        if (SELECTED.size() <= 1)
+            return std::nullopt;
+        CBox out = canvasBox(SELECTED.front());
+        for (const auto& window : SELECTED)
+            out = unite(out, canvasBox(window));
+        return out;
+    }
+
+    std::optional<CBox> CCanvas::marquee() const {
+        if (m_drag.kind != SDrag::DRAG_MARQUEE || !m_drag.moved)
+            return std::nullopt;
+        const Vector2D A = m_drag.start, B = m_drag.last;
+        return CBox{std::min(A.x, B.x), std::min(A.y, B.y), std::abs(B.x - A.x), std::abs(B.y - A.y)};
+    }
+
+    const std::vector<Arrange::SGuide>& CCanvas::guides() const {
+        return m_guides;
     }
 
     std::vector<PHLWINDOW> CCanvas::canvasWindows() const {
@@ -481,6 +666,17 @@ namespace Expanse {
         return {point - (usableArea().middle() - MONITOR->m_position) / scale, scale};
     }
 
+    SCamera CCanvas::zoomedAround(const SCamera& camera, double scale, const Vector2D& anchor) const {
+        const auto MONITOR = monitor();
+        if (!MONITOR)
+            return camera;
+        // The canvas point under the anchor stays put.
+        const double   S     = std::clamp(scale, MIN_SCALE, MAX_SCALE);
+        const Vector2D LOCAL = anchor - MONITOR->m_position;
+        const Vector2D POINT = camera.origin + LOCAL / camera.scale;
+        return {POINT - LOCAL / S, S};
+    }
+
     CBox CCanvas::viewCentre() const {
         const auto    MONITOR = monitor();
         const SCamera CAMERA  = live() ? m_camera : homeCamera();
@@ -489,24 +685,26 @@ namespace Expanse {
         return {CAMERA.origin + (usableArea().middle() - MONITOR->m_position) / CAMERA.scale, Vector2D{}};
     }
 
-    SCamera CCanvas::fitCamera() const {
+    CBox CCanvas::viewInCanvas() const {
+        const auto MONITOR = monitor();
+        if (!MONITOR)
+            return {};
+        const Vector2D A = toCanvas(MONITOR->m_position), B = toCanvas(MONITOR->m_position + MONITOR->m_size);
+        return {A, B - A};
+    }
+
+    SCamera CCanvas::fitCamera(double maxScale) const {
         const auto WINDOWS = canvasWindows();
         if (WINDOWS.empty())
-            return {homeCamera().origin, OVERVIEW_MAX_SCALE};
+            return centredOn(viewCentre().pos(), 0.5);
 
-        CBox bounds = WINDOWS.front()->getFullWindowBoundingBox();
-        for (const auto& window : WINDOWS) {
-            const CBox   BOX  = window->getFullWindowBoundingBox();
-            const double LEFT = std::min(bounds.x, BOX.x), TOP = std::min(bounds.y, BOX.y);
-            const double RIGHT = std::max(bounds.x + bounds.w, BOX.x + BOX.w), BOTTOM = std::max(bounds.y + bounds.h, BOX.y + BOX.h);
-            bounds = {LEFT, TOP, RIGHT - LEFT, BOTTOM - TOP};
-        }
+        CBox bounds = canvasBox(WINDOWS.front());
+        for (const auto& window : WINDOWS)
+            bounds = unite(bounds, canvasBox(window));
+        bounds.expand(FIT_INSET);
 
         const CBox   AREA  = usableArea();
-        const double SCALE = std::clamp(std::min({(AREA.w - 2.0 * OVERVIEW_MARGIN) / std::max(bounds.w, 1.0), (AREA.h - 2.0 * OVERVIEW_MARGIN) / std::max(bounds.h, 1.0),
-                                                  OVERVIEW_MAX_SCALE}),
-                                        OVERVIEW_MIN_SCALE, OVERVIEW_MAX_SCALE);
-
+        const double SCALE = std::max(std::min({AREA.w / std::max(bounds.w, 1.0), AREA.h / std::max(bounds.h, 1.0), maxScale}), MIN_SCALE);
         return centredOn(bounds.middle(), SCALE);
     }
 
@@ -523,18 +721,32 @@ namespace Expanse {
         const double SCREENX = WINDOW.w <= AREA.w ? AREA.x + (AREA.w - WINDOW.w) / 2.0 : AREA.x;
         const double SCREENY = WINDOW.h <= AREA.h ? AREA.y + (AREA.h - WINDOW.h) / 2.0 : AREA.y;
 
-        return {Vector2D{WINDOW.x - (SCREENX - MONITOR->m_position.x), WINDOW.y - (SCREENY - MONITOR->m_position.y)}, 1.0};
+        return {Vector2D{std::round(WINDOW.x - (SCREENX - MONITOR->m_position.x)), std::round(WINDOW.y - (SCREENY - MONITOR->m_position.y))}, 1.0};
+    }
+
+    Vector2D CCanvas::toScreen(const Vector2D& canvasPoint) const {
+        const auto MONITOR = monitor();
+        if (!MONITOR || !live())
+            return canvasPoint;
+        return MONITOR->m_position + (canvasPoint - m_camera.origin) * m_camera.scale;
+    }
+
+    Vector2D CCanvas::toCanvas(const Vector2D& screenPoint) const {
+        const auto MONITOR = monitor();
+        if (!MONITOR || !live())
+            return screenPoint;
+        return m_camera.origin + (screenPoint - MONITOR->m_position) / m_camera.scale;
     }
 
     CBox CCanvas::screenBox(PHLWINDOW window) const {
-        const auto MONITOR = monitor();
-        if (!MONITOR || !window)
+        if (!window)
             return {};
-
         const CBox BOX = canvasBox(window);
-        if (!live())
-            return BOX;
-        return {MONITOR->m_position + (BOX.pos() - m_camera.origin) * m_camera.scale, BOX.size() * m_camera.scale};
+        return {toScreen(BOX.pos()), BOX.size() * scale()};
+    }
+
+    CBox CCanvas::closeButton(const CBox& screen) {
+        return {screen.x + screen.w - CLOSE_INSET - CLOSE_SIZE, screen.y + CLOSE_INSET, CLOSE_SIZE, CLOSE_SIZE};
     }
 
     PHLWINDOW CCanvas::windowAt(const Vector2D& pos) const {
@@ -546,18 +758,6 @@ namespace Expanse {
         return nullptr;
     }
 
-    bool CCanvas::pickAt(const Vector2D& pos) {
-        if (m_state != STATE_OVERVIEW && m_state != STATE_OPENING)
-            return false;
-
-        const auto WINDOW = windowAt(pos);
-        if (WINDOW)
-            glideTo(WINDOW);
-        else
-            close();
-        return WINDOW != nullptr;
-    }
-
     std::string CCanvas::stateJson() const {
         static constexpr const char* STATES[] = {"idle", "opening", "overview", "gliding"};
 
@@ -567,16 +767,16 @@ namespace Expanse {
             const CBox SCREEN = screenBox(window);
             if (!windows.empty())
                 windows += ",";
-            windows += std::format(R"({{"title":"{}","class":"{}","floating":{},"canvas":[{:.0f},{:.0f},{:.0f},{:.0f}],"screen":[{:.0f},{:.0f},{:.0f},{:.0f}]}})",
-                                   jsonEscape(window->m_title), jsonEscape(window->m_class), window->m_isFloating, CANVAS.x + m_scrolled.x, CANVAS.y + m_scrolled.y, CANVAS.w,
-                                   CANVAS.h, SCREEN.x, SCREEN.y, SCREEN.w, SCREEN.h);
+            windows += std::format(R"({{"title":"{}","class":"{}","floating":{},"selected":{},"canvas":[{:.0f},{:.0f},{:.0f},{:.0f}],"screen":[{:.0f},{:.0f},{:.0f},{:.0f}]}})",
+                                   jsonEscape(window->m_title), jsonEscape(window->m_class), window->m_isFloating, isSelected(window), CANVAS.x + m_scrolled.x,
+                                   CANVAS.y + m_scrolled.y, CANVAS.w, CANVAS.h, SCREEN.x, SCREEN.y, SCREEN.w, SCREEN.h);
         }
 
         const auto HOVER  = m_hover.lock();
         const auto TARGET = m_target.lock();
-        return std::format(R"({{"state":"{}","scale":{:.3f},"origin":[{:.1f},{:.1f}],"scrolled":[{:.1f},{:.1f}],"hover":"{}","target":"{}","windows":[{}]}})",
-                           STATES[m_state], m_camera.scale, m_camera.origin.x, m_camera.origin.y, m_scrolled.x, m_scrolled.y, HOVER ? jsonEscape(HOVER->m_title) : "",
-                           TARGET ? jsonEscape(TARGET->m_title) : "", windows) +
+        return std::format(R"({{"state":"{}","scale":{:.3f},"origin":[{:.1f},{:.1f}],"scrolled":[{:.1f},{:.1f}],"autoCentre":{},"hover":"{}","target":"{}","windows":[{}]}})",
+                           STATES[m_state], m_camera.scale, m_camera.origin.x, m_camera.origin.y, m_scrolled.x, m_scrolled.y, m_autoCentre,
+                           HOVER ? jsonEscape(HOVER->m_title) : "", TARGET ? jsonEscape(TARGET->m_title) : "", windows) +
             "\n";
     }
 
@@ -585,7 +785,12 @@ namespace Expanse {
         m_animating = false;
         m_target.reset();
         m_hover.reset();
+        m_selected.clear();
+        m_drag = {};
+        m_guides.clear();
         m_swallowedKeys.clear();
-        m_camera = homeCamera();
+        m_spaceHeld = false;
+        m_pinching  = false;
+        m_camera    = homeCamera();
     }
 }

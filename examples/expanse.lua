@@ -28,3 +28,7 @@ for _, direction in ipairs({ "left", "right", "up", "down" }) do
   bind("SUPER + " .. direction, "Hop to the window " .. (direction == "up" and "above" or direction == "down" and "below" or "on the " .. direction),
     hl.plugin.expanse.hop(direction))
 end
+
+-- ALT + SHIFT + ` turns auto-centre on or off: off, clicking a window that's
+-- partly on screen leaves the canvas where it is, for side-by-side work.
+bind("ALT + SHIFT + grave", "Auto-centre on or off", hl.plugin.expanse.auto_centre())
