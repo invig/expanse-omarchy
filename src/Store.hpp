@@ -1,0 +1,51 @@
+#pragma once
+
+#include <hyprutils/math/Box.hpp>
+
+#include <cstdint>
+#include <optional>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
+using namespace Hyprutils::Math;
+
+// The canvas, saved to $XDG_STATE_HOME/expanse/layout.json so it survives
+// reloads and restarts, as Expanse keeps it on the Mac.
+namespace Expanse::Store {
+
+    struct SWindow {
+        std::string         app;       // the window's initial class
+        std::string         title;     // a hash of its initial title, see titleKey
+        std::string         workspace; // its workspace's name
+        CBox                frame;     // absolute canvas coordinates
+        bool                wasTiled = false;
+        std::optional<CBox> original; // where it was before the canvas, real coordinates
+        // While the app keeps running (Hyprland or the plugin reloaded), these
+        // identify the window exactly, even among windows with the same title.
+        uint64_t            address = 0;
+        int64_t             pid     = 0;
+    };
+
+    struct SLayout {
+        std::vector<std::pair<std::string, Vector2D>> scrolled; // per workspace
+        bool                                          autoCentre = true;
+        std::vector<SWindow>                          windows;
+    };
+
+    std::optional<SLayout> load();
+    void                   save(const SLayout& layout);
+
+    // Window titles can be private (document names, mail subjects), so the
+    // file stores a hash: enough to recognise the same window next time, not
+    // to read the title.
+    std::string titleKey(const std::string& title);
+
+    // The saved entry for a window: the same window (same address in the same
+    // process), then same app and title, then same app. A matched entry leaves
+    // the pool so two windows never claim one spot, and `open` (addresses of
+    // windows open now) keeps the fallbacks off entries another open window owns.
+    std::optional<SWindow> takeMatch(const std::string& app, const std::string& title, uint64_t address, int64_t pid, const std::set<uint64_t>& open,
+                                     std::vector<SWindow>& pool);
+}

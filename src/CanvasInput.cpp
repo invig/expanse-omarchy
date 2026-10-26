@@ -136,6 +136,9 @@ namespace Expanse {
     }
 
     bool CCanvas::onMouseButton(uint32_t button, bool pressed) {
+        if (m_paused)
+            return false;
+
         if (!live()) {
             // At 100%, clicking a window that isn't fully on screen centres it.
             // The click itself goes to the app; a drag (selecting, moving the
@@ -161,6 +164,8 @@ namespace Expanse {
             m_drag          = {};
             m_guides.clear();
             damage();
+            if (DRAG.kind == SDrag::DRAG_WINDOW && DRAG.moved)
+                scheduleSave();
             // A click (no drag) on a window dives into it.
             if (DRAG.kind == SDrag::DRAG_WINDOW && !DRAG.moved)
                 if (const auto WINDOW = DRAG.window.lock())
@@ -222,6 +227,8 @@ namespace Expanse {
     }
 
     bool CCanvas::onAxis(const IPointer::SAxisEvent& event) {
+        if (m_paused)
+            return false;
         if (m_state == STATE_GLIDING)
             return true;
 
@@ -250,6 +257,8 @@ namespace Expanse {
 
     bool CCanvas::onPinchBegin() {
         m_pinchScale = 1.0;
+        if (m_paused)
+            return false;
 
         if (m_state == STATE_GLIDING)
             return true;
@@ -386,7 +395,7 @@ namespace Expanse {
         // Keyboard focus (binds, Alt-Tab, a window closing) centres a window
         // that isn't fully on screen. Clicks are handled on release; focus
         // that follows the mouse never moves the canvas.
-        if (live() || reason == Desktop::FOCUS_REASON_FFM || reason == Desktop::FOCUS_REASON_CLICK)
+        if (m_paused || live() || reason == Desktop::FOCUS_REASON_FFM || reason == Desktop::FOCUS_REASON_CLICK)
             return;
 
         if (isCanvasWindow(window) && !fullyVisible(window))

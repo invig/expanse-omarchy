@@ -2,6 +2,7 @@
 
 #include "Arrange.hpp"
 #include "Nearest.hpp"
+#include "Store.hpp"
 #include "globals.hpp"
 
 #include <hyprland/src/desktop/DesktopTypes.hpp>
@@ -11,7 +12,10 @@
 #include <chrono>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
+
+struct wl_event_source;
 
 namespace Desktop {
     enum eFocusReason : uint8_t;
@@ -62,6 +66,16 @@ namespace Expanse {
         void                   closeWindows(const std::vector<PHLWINDOW>& windows);
         void                   setAutoCentre(bool on);
         bool                   autoCentre() const;
+        void                   restoreOffscreen(); // every window back in view
+
+        // Remembering the canvas (CanvasStore.cpp)
+        void                   restoreCanvas(); // from the saved layout: at load, and on resume
+        void                   pause();         // windows back where they were before the canvas
+        void                   resume();
+        bool                   paused() const;
+        void                   shutdown();      // saves, then puts windows back
+        void                   scheduleSave();
+        void                   saveNow();
 
         // Input; true swallows the event
         void                   onPreRender(PHLMONITOR monitor);
@@ -74,6 +88,7 @@ namespace Expanse {
         bool                   onKey(uint32_t keycode, bool pressed);
         void                   onFocus(PHLWINDOW window, Desktop::eFocusReason reason);
         void                   onWindowOpen(PHLWINDOW window);
+        void                   onWindowClose(PHLWINDOW window);
 
         // What's drawn
         bool                   live() const;
@@ -122,6 +137,11 @@ namespace Expanse {
         void                   moveWindow(PHLWINDOW window, const Vector2D& canvasPos);
         void                   raise(PHLWINDOW window);
         void                   placeNewWindow(PHLWINDOW window, PHLWINDOW anchor);
+        Vector2D               scrolledFor(const PHLWORKSPACE& workspace) const;
+        void                   noteOriginal(PHLWINDOW window);
+        bool                   placeFromSaved(PHLWINDOW window, bool exactOnly);
+        void                   putWindowsBack();
+        void                   stopSaving();
         PHLWINDOW              topWindowInView(PHLWINDOW excluding) const;
         void                   commit();
         std::vector<PHLWINDOW> selection() const;
@@ -151,9 +171,20 @@ namespace Expanse {
         // there unless you've panned or zoomed since.
         std::optional<SCamera> m_returnCamera;
 
-        // Total distance the canvas has scrolled under the screen since load,
-        // so a canvas position stays meaningful across glides.
-        Vector2D               m_scrolled;
+        // How far each workspace's canvas has scrolled under the screen, so a
+        // canvas position (real + scrolled) stays meaningful across glides.
+        std::unordered_map<std::string, Vector2D> m_scrolled;
+
+        // Where each window the canvas has moved was before it, to put back.
+        struct SOriginal {
+            PHLWINDOWREF window;
+            bool         wasTiled = false;
+            CBox         box;
+        };
+        std::vector<SOriginal>      m_originals;
+        std::vector<Store::SWindow> m_pool; // saved spots of windows not open now
+        bool                        m_paused    = false;
+        wl_event_source*            m_saveTimer = nullptr;
 
         std::vector<PHLWINDOWREF> m_selected;
 

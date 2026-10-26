@@ -1,5 +1,7 @@
 #define WLR_USE_UNSTABLE
 
+#include <algorithm>
+#include <cctype>
 #include <format>
 #include <sstream>
 #include <string>
@@ -8,6 +10,7 @@
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/event/EventBus.hpp>
+#include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 
 #include <lua.hpp>
@@ -52,6 +55,25 @@ static int luaAutoCentre(lua_State* L) {
     });
 }
 
+static int luaPause(lua_State* L) {
+    return luaPush(L, [](lua_State*) {
+        if (g_canvas.paused())
+            g_canvas.resume();
+        else
+            g_canvas.pause();
+        HyprlandAPI::addNotification(PHANDLE, g_canvas.paused() ? "Expanse paused: windows are back where they were" : "Expanse resumed", CHyprColor{0.54F, 0.71F, 0.98F, 1.F},
+                                     2500);
+        return 0;
+    });
+}
+
+static int luaRestore(lua_State* L) {
+    return luaPush(L, [](lua_State*) {
+        g_canvas.restoreOffscreen();
+        return 0;
+    });
+}
+
 static int luaHop(lua_State* L) {
     const auto DIRECTION = parseDirection(luaL_checkstring(L, 1));
     if (!DIRECTION)
@@ -67,8 +89,8 @@ static int luaHop(lua_State* L) {
     return 1;
 }
 
-static constexpr const char* USAGE = "usage: hyprctl expanse [state | toggle | open | close | hop <left|right|up|down> | pick <x> <y> | tidy | fit | zoom <scale> | "
-                                     "pan <dx> <dy> | select all | autocentre <on|off>]\n";
+static constexpr const char* USAGE = "usage: hyprctl expanse [state | toggle | open | close | hop <left|right|up|down> | focus <app> | pick <x> <y> | tidy | fit | "
+                                     "zoom <scale> | pan <dx> <dy> | select all | restore | pause | resume | autocentre <on|off>]\n";
 
 static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
     std::istringstream words{request};
@@ -85,6 +107,28 @@ static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
         g_canvas.close();
     else if (verb == "tidy")
         g_canvas.tidy();
+    else if (verb == "restore")
+        g_canvas.restoreOffscreen();
+    else if (verb == "pause")
+        g_canvas.pause();
+    else if (verb == "resume")
+        g_canvas.resume();
+    else if (verb == "focus") {
+        // The newest window whose app matches, as expanse://focus?app= on the Mac.
+        std::string app;
+        std::getline(words >> std::ws, app);
+        const auto LOWER = [](std::string text) {
+            std::ranges::transform(text, text.begin(), [](unsigned char c) { return std::tolower(c); });
+            return text;
+        };
+        PHLWINDOW match;
+        for (const auto& window : g_canvas.canvasWindows())
+            if (!app.empty() && (LOWER(window->m_class).contains(LOWER(app)) || LOWER(window->m_initialClass).contains(LOWER(app))))
+                match = window;
+        if (!match)
+            return std::format("no window of {} on this canvas\n", app);
+        g_canvas.glideTo(match);
+    }
     else if (verb == "fit")
         g_canvas.fit();
     else if (verb == "hop") {
@@ -158,23 +202,30 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         [CANCEL](IKeyboard::SKeyEvent event, Event::SCallbackInfo& info) { CANCEL(g_canvas.onKey(event.keycode, event.state == WL_KEYBOARD_KEY_STATE_PRESSED), info); }));
     g_listeners.push_back(events.window.active.listen([](PHLWINDOW window, Desktop::eFocusReason reason) { g_canvas.onFocus(window, reason); }));
     g_listeners.push_back(events.window.openLate.listen([](PHLWINDOW window) { g_canvas.onWindowOpen(window); }));
+    g_listeners.push_back(events.window.close.listen([](PHLWINDOW window) { g_canvas.onWindowClose(window); }));
 
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "overview", luaOverview);
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "hop", luaHop);
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "tidy", luaTidy);
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "auto_centre", luaAutoCentre);
+    HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "pause", luaPause);
+    HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "restore", luaRestore);
     HyprlandAPI::addDispatcherV2(PHANDLE, "expanse:overview", [](std::string) {
         g_canvas.toggle();
         return SDispatchResult{};
     });
     g_ctlCommand = HyprlandAPI::registerHyprCtlCommand(PHANDLE, SHyprCtlCommand{.name = "expanse", .exact = false, .fn = ctlCommand});
 
-    return {"expanse", "Expanse: an infinite, zoomable canvas for your windows", "Matthew Salmon", "0.2.0"};
+    // The canvas comes back where it was, once Hyprland has finished loading us.
+    g_pEventLoopManager->doLater([] { g_canvas.restoreCanvas(); });
+
+    return {"expanse", "Expanse: an infinite, zoomable canvas for your windows", "Matthew Salmon", "0.3.0"};
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
     Expanse::Render::shutdown();
-    g_canvas.reset();
+    // As quitting does on the Mac: the layout is saved, and windows go back.
+    g_canvas.shutdown();
     g_listeners.clear();
     if (g_ctlCommand)
         HyprlandAPI::unregisterHyprCtlCommand(PHANDLE, g_ctlCommand);

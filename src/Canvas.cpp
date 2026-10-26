@@ -117,6 +117,10 @@ namespace Expanse {
     // MARK: Modes
 
     void CCanvas::toggle() {
+        if (m_paused) {
+            resume();
+            return;
+        }
         switch (m_state) {
             case STATE_IDLE: open(); break;
             case STATE_OPENING:
@@ -126,6 +130,8 @@ namespace Expanse {
     }
 
     bool CCanvas::begin() {
+        if (m_paused)
+            return false;
         const auto MONITOR = Desktop::focusState()->monitor();
         if (!MONITOR || !MONITOR->m_activeWorkspace)
             return false;
@@ -207,6 +213,8 @@ namespace Expanse {
     }
 
     void CCanvas::hop(eDirection direction) {
+        if (m_paused)
+            return;
         switch (m_state) {
             case STATE_GLIDING: {
                 // Mid-glide: hop on from the window it's heading to, straight away.
@@ -382,12 +390,14 @@ namespace Expanse {
                 if (!TARGET || !TARGET->floating())
                     continue;
 
+                noteOriginal(window);
                 CBox box = TARGET->position();
                 box.translate(-DELTA);
                 g_layoutManager->setTargetGeom(box, TARGET);
                 TARGET->warpPositionSize();
             }
-            m_scrolled = m_scrolled + DELTA;
+            if (const auto WORKSPACE = m_workspace.lock())
+                m_scrolled[WORKSPACE->m_name] = scrolledFor(WORKSPACE) + DELTA;
         }
 
         m_camera = homeCamera();
@@ -422,6 +432,7 @@ namespace Expanse {
         m_target.reset();
         m_hover.reset();
         g_pHyprRenderer->damageMonitor(MONITOR);
+        scheduleSave();
     }
 
     // MARK: Windows
@@ -432,8 +443,10 @@ namespace Expanse {
         std::vector<std::pair<SP<Layout::ITarget>, CBox>> tiled;
         for (const auto& window : canvasWindows()) {
             const auto TARGET = window->layoutTarget();
-            if (TARGET && !TARGET->floating() && !Fullscreen::controller()->isFullscreen(window))
+            if (TARGET && !TARGET->floating() && !Fullscreen::controller()->isFullscreen(window)) {
+                noteOriginal(window);
                 tiled.emplace_back(TARGET, TARGET->position());
+            }
         }
 
         for (const auto& [target, box] : tiled)
@@ -457,7 +470,7 @@ namespace Expanse {
         // A new standard window opens in free space beside what you were
         // working on (the top window in view), instead of on top of it.
         // Dialogs keep the spot their app gives them.
-        if (!window || window->parent() || window->isModal() || window->isX11OverrideRedirect())
+        if (m_paused || !window || window->parent() || window->isModal() || window->isX11OverrideRedirect())
             return;
 
         const auto ANCHOR = topWindowInView(window);
@@ -469,12 +482,26 @@ namespace Expanse {
     }
 
     void CCanvas::placeNewWindow(PHLWINDOW window, PHLWINDOW anchor) {
-        if (!isCanvasWindow(window) || m_state == STATE_GLIDING)
+        if (!window->m_isMapped || !window->m_workspace || window->m_workspace->m_isSpecialWorkspace || m_state == STATE_GLIDING)
             return;
 
         const auto TARGET = window->layoutTarget();
         if (!TARGET)
             return;
+
+        // A window that had a spot last time (an app opened again, or after a
+        // restart, on any workspace) goes back to it.
+        if (placeFromSaved(window, false)) {
+            scheduleSave();
+            if (isCanvasWindow(window) && !live() && !fullyVisible(window))
+                glideTo(window);
+            return;
+        }
+
+        if (!isCanvasWindow(window))
+            return;
+
+        noteOriginal(window);
         // examples/expanse.lua floats windows from their first frame, at their
         // own size; without it, a new window floats here.
         if (!TARGET->floating())
@@ -493,6 +520,7 @@ namespace Expanse {
             return; // the first window, or nowhere free: where Hyprland put it
 
         moveWindow(window, *SPOT);
+        scheduleSave();
 
         // Off screen: the canvas glides to it, as to any window you go to.
         if (!live() && !fullyVisible(window))
@@ -510,6 +538,7 @@ namespace Expanse {
         if (!TARGET || !TARGET->floating())
             return;
 
+        noteOriginal(window);
         // The layout box includes the border; keep its offset from the window.
         CBox       box    = TARGET->position();
         const auto OFFSET = box.pos() - canvasBox(window).pos();
@@ -563,6 +592,7 @@ namespace Expanse {
 
         cameraMovedByUser();
         animateTo(fitCamera(1.0), STATE_OVERVIEW, CAMERA_SECONDS);
+        scheduleSave();
     }
 
     void CCanvas::selectAll() {
@@ -585,6 +615,7 @@ namespace Expanse {
 
     void CCanvas::setAutoCentre(bool on) {
         m_autoCentre = on;
+        scheduleSave();
     }
 
     bool CCanvas::autoCentre() const {
@@ -829,14 +860,15 @@ namespace Expanse {
             if (!windows.empty())
                 windows += ",";
             windows += std::format(R"({{"title":"{}","class":"{}","floating":{},"selected":{},"canvas":[{:.0f},{:.0f},{:.0f},{:.0f}],"screen":[{:.0f},{:.0f},{:.0f},{:.0f}]}})",
-                                   jsonEscape(window->m_title), jsonEscape(window->m_class), window->m_isFloating, isSelected(window), CANVAS.x + m_scrolled.x,
-                                   CANVAS.y + m_scrolled.y, CANVAS.w, CANVAS.h, SCREEN.x, SCREEN.y, SCREEN.w, SCREEN.h);
+                                   jsonEscape(window->m_title), jsonEscape(window->m_class), window->m_isFloating, isSelected(window), CANVAS.x + scrolledFor(window->m_workspace).x,
+                                   CANVAS.y + scrolledFor(window->m_workspace).y, CANVAS.w, CANVAS.h, SCREEN.x, SCREEN.y, SCREEN.w, SCREEN.h);
         }
 
-        const auto HOVER  = m_hover.lock();
-        const auto TARGET = m_target.lock();
-        return std::format(R"({{"state":"{}","scale":{:.3f},"origin":[{:.1f},{:.1f}],"scrolled":[{:.1f},{:.1f}],"autoCentre":{},"hover":"{}","target":"{}","windows":[{}]}})",
-                           STATES[m_state], m_camera.scale, m_camera.origin.x, m_camera.origin.y, m_scrolled.x, m_scrolled.y, m_autoCentre,
+        const auto HOVER    = m_hover.lock();
+        const auto TARGET   = m_target.lock();
+        const auto SCROLLED = scrolledFor(workspace());
+        return std::format(R"({{"state":"{}","paused":{},"scale":{:.3f},"origin":[{:.1f},{:.1f}],"scrolled":[{:.1f},{:.1f}],"autoCentre":{},"hover":"{}","target":"{}","windows":[{}]}})",
+                           STATES[m_state], m_paused, m_camera.scale, m_camera.origin.x, m_camera.origin.y, SCROLLED.x, SCROLLED.y, m_autoCentre,
                            HOVER ? jsonEscape(HOVER->m_title) : "", TARGET ? jsonEscape(TARGET->m_title) : "", windows) +
             "\n";
     }
