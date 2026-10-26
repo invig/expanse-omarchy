@@ -97,7 +97,7 @@ namespace Expanse {
                 std::vector<CBox> others;
                 for (const auto& window : canvasWindows())
                     if (std::ranges::none_of(m_drag.starts, [&](const auto& start) { return start.first.lock() == window; }))
-                        others.push_back({window->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT), window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT)});
+                        others.push_back({window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL), window->size(Desktop::View::IGeometric::GEOMETRIC_GOAL)});
 
                 CBox bounds = m_drag.starts.front().second;
                 for (const auto& [ref, box] : m_drag.starts) {
@@ -214,7 +214,7 @@ namespace Expanse {
 
         m_drag = {.kind = SDrag::DRAG_WINDOW, .start = POS, .last = POS, .window = WINDOW};
         for (const auto& window : MOVING) {
-            m_drag.starts.emplace_back(window, CBox{window->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT), window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT)});
+            m_drag.starts.emplace_back(window, CBox{window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL), window->size(Desktop::View::IGeometric::GEOMETRIC_GOAL)});
             raise(window);
         }
         damage();

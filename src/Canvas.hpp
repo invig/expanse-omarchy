@@ -73,6 +73,7 @@ namespace Expanse {
         bool                   onPinchEnd();
         bool                   onKey(uint32_t keycode, bool pressed);
         void                   onFocus(PHLWINDOW window, Desktop::eFocusReason reason);
+        void                   onWindowOpen(PHLWINDOW window);
 
         // What's drawn
         bool                   live() const;
@@ -120,6 +121,8 @@ namespace Expanse {
         void                   floatTiledWindows();
         void                   moveWindow(PHLWINDOW window, const Vector2D& canvasPos);
         void                   raise(PHLWINDOW window);
+        void                   placeNewWindow(PHLWINDOW window, PHLWINDOW anchor);
+        PHLWINDOW              topWindowInView(PHLWINDOW excluding) const;
         void                   commit();
         std::vector<PHLWINDOW> selection() const;
         void                   clearSelection();

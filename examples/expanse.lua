@@ -16,6 +16,11 @@ local bind = (o and o.bind) or function(keys, _description, action)
   hl.bind(keys, action)
 end
 
+-- Every window lives on the canvas floating, at its own size, from its first
+-- frame (modal dialogs float on their own account). Expanse moves each new one
+-- into free space beside what you were working on.
+hl.window_rule({ name = "expanse-canvas", match = { modal = false }, float = true })
+
 -- ALT + ` zooms out to every window and back, as on the Mac.
 bind("ALT + grave", "Zoom out to every window", hl.plugin.expanse.overview())
 

@@ -157,6 +157,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_listeners.push_back(events.input.keyboard.key.listen(
         [CANCEL](IKeyboard::SKeyEvent event, Event::SCallbackInfo& info) { CANCEL(g_canvas.onKey(event.keycode, event.state == WL_KEYBOARD_KEY_STATE_PRESSED), info); }));
     g_listeners.push_back(events.window.active.listen([](PHLWINDOW window, Desktop::eFocusReason reason) { g_canvas.onFocus(window, reason); }));
+    g_listeners.push_back(events.window.openLate.listen([](PHLWINDOW window) { g_canvas.onWindowOpen(window); }));
 
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "overview", luaOverview);
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "hop", luaHop);

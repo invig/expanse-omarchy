@@ -52,7 +52,14 @@ namespace Expanse {
         return {centre - view / (2.0 * scale), scale};
     }
 
+    // Where the window is on the canvas: its goal, so a window still animating
+    // in (or moving) is arranged by where it's going.
     static CBox canvasBox(const PHLWINDOW& window) {
+        return {window->position(IGeometric::GEOMETRIC_GOAL), window->size(IGeometric::GEOMETRIC_GOAL)};
+    }
+
+    // Where it's drawn this frame, mid-animation included.
+    static CBox drawnBox(const PHLWINDOW& window) {
         return {window->position(IGeometric::GEOMETRIC_CURRENT), window->size(IGeometric::GEOMETRIC_CURRENT)};
     }
 
@@ -438,6 +445,60 @@ namespace Expanse {
         }
     }
 
+    PHLWINDOW CCanvas::topWindowInView(PHLWINDOW excluding) const {
+        const CBox VIEW = live() ? viewInCanvas() : usableArea();
+        for (const auto& window : canvasWindows() | std::views::reverse)
+            if (window != excluding && !canvasBox(window).intersection(VIEW).empty())
+                return window;
+        return nullptr;
+    }
+
+    void CCanvas::onWindowOpen(PHLWINDOW window) {
+        // A new standard window opens in free space beside what you were
+        // working on (the top window in view), instead of on top of it.
+        // Dialogs keep the spot their app gives them.
+        if (!window || window->parent() || window->isModal() || window->isX11OverrideRedirect())
+            return;
+
+        const auto ANCHOR = topWindowInView(window);
+        // Out of the event: Hyprland is still mapping the window.
+        g_pEventLoopManager->doLater([this, ref = PHLWINDOWREF{window}, anchor = PHLWINDOWREF{ANCHOR}] {
+            if (const auto WINDOW = ref.lock())
+                placeNewWindow(WINDOW, anchor.lock());
+        });
+    }
+
+    void CCanvas::placeNewWindow(PHLWINDOW window, PHLWINDOW anchor) {
+        if (!isCanvasWindow(window) || m_state == STATE_GLIDING)
+            return;
+
+        const auto TARGET = window->layoutTarget();
+        if (!TARGET)
+            return;
+        // examples/expanse.lua floats windows from their first frame, at their
+        // own size; without it, a new window floats here.
+        if (!TARGET->floating())
+            g_layoutManager->changeFloatingMode(TARGET);
+
+        std::vector<CBox> others;
+        for (const auto& other : canvasWindows())
+            if (other != window)
+                others.push_back(canvasBox(other));
+
+        const CBox     BOX     = canvasBox(window);
+        const Vector2D NEAR    = anchor && isCanvasWindow(anchor) ? canvasBox(anchor).middle() : viewCentre().pos();
+        const CBox     VISIBLE = live() ? viewInCanvas() : usableArea();
+        const auto     SPOT    = Arrange::freeSpot(BOX.size(), others, NEAR, VISIBLE, !m_autoCentre);
+        if (!SPOT)
+            return; // the first window, or nowhere free: where Hyprland put it
+
+        moveWindow(window, *SPOT);
+
+        // Off screen: the canvas glides to it, as to any window you go to.
+        if (!live() && !fullyVisible(window))
+            glideTo(window);
+    }
+
     void CCanvas::raise(PHLWINDOW window) {
         Desktop::windowState()->raise(window);
         if (const auto TARGET = window->layoutTarget())
@@ -741,7 +802,7 @@ namespace Expanse {
     CBox CCanvas::screenBox(PHLWINDOW window) const {
         if (!window)
             return {};
-        const CBox BOX = canvasBox(window);
+        const CBox BOX = drawnBox(window);
         return {toScreen(BOX.pos()), BOX.size() * scale()};
     }
 

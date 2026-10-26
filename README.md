@@ -25,6 +25,8 @@ Built and tested on Omarchy (Hyprland 0.56.2, aarch64) in [Try Omarchy](https://
 | <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>`</kbd> | Auto-centre on or off. Off: clicking a window that's partly on screen leaves the canvas where it is, for side-by-side work |
 | Right-click on the canvas | Back to 100% |
 
+New windows open in free space, next to what you were working on, instead of on top of it; if the nearest free spot is off screen, the canvas glides there. Dialogs keep the spot their app gives them.
+
 The keys after the first three work on the canvas (zoomed out, or after scrolling on the desktop). <kbd>Super</kbd> stands in for the Mac's <kbd>⌘</kbd> and <kbd>Ctrl</kbd>, so <kbd>Super</kbd> + <kbd>W</kbd> on the canvas closes the hovered window instead of the focused one.
 
 The nearest window that way is the one Expanse on the Mac picks: a window sharing the row (or column) wins, nearest first; failing that, the closest within ~35° of straight that way. A hop pressed mid-glide hops on from the window the glide is heading to.
@@ -57,7 +59,7 @@ hl.plugin.load("/path/to/expanse-hypr/expanse.so")
 dofile("/path/to/expanse-hypr/examples/expanse.lua")
 ```
 
-[examples/expanse.lua](examples/expanse.lua) binds <kbd>Alt</kbd> + <kbd>`</kbd>, <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>`</kbd> and <kbd>Super</kbd> + arrows, with descriptions for Omarchy's key guide. `hl.plugin.expanse.overview()`, `hop("left")`, `tidy()` and `auto_centre()` return their actions, like `hl.dsp.*`, so they work in `hl.bind` and `hyprctl dispatch` alike.
+[examples/expanse.lua](examples/expanse.lua) floats every window from its first frame (a window rule; without it, a tiled window floats where it is when the canvas first touches it) and binds <kbd>Alt</kbd> + <kbd>`</kbd>, <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>`</kbd> and <kbd>Super</kbd> + arrows, with descriptions for Omarchy's key guide. `hl.plugin.expanse.overview()`, `hop("left")`, `tidy()` and `auto_centre()` return their actions, like `hl.dsp.*`, so they work in `hl.bind` and `hyprctl dispatch` alike.
 
 `hyprpm` isn't installed on Omarchy; [hyprpm.toml](hyprpm.toml) is ready for when it is (`hyprpm add <this repo>`, `hyprpm enable expanse`).
 
