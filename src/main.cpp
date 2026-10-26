@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include <hyprland/src/config/values/types/StringValue.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/event/EventBus.hpp>
@@ -16,6 +17,7 @@
 #include <lua.hpp>
 
 #include "Canvas.hpp"
+#include "HotCorner.hpp"
 #include "Render.hpp"
 #include "globals.hpp"
 
@@ -97,7 +99,7 @@ static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
     std::string        name, verb;
     words >> name >> verb;
 
-    if (verb.empty() || verb == "state")
+    if (verb.empty() || verb == "state" || verb == "corner")
         ;
     else if (verb == "toggle")
         g_canvas.toggle();
@@ -164,6 +166,8 @@ static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
     } else
         return USAGE;
 
+    if (verb == "corner")
+        return g_hotCorner.describe() + "\n";
     return g_canvas.stateJson();
 }
 
@@ -187,12 +191,30 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             info.cancelled = true;
     };
 
+    HyprlandAPI::addConfigValueV2(PHANDLE,
+                                  makeShared<Config::Values::CStringValue>("plugin:expanse:hot_corner",
+                                                                           "rest the pointer here to zoom out: off, all, bottom, top_left, top_right, bottom_left or bottom_right",
+                                                                           Config::STRING{"bottom"}));
+    g_hotCorner.onTrigger = [] { g_canvas.toggle(); };
+
     auto& events = Event::bus()->m_events;
-    g_listeners.push_back(events.render.pre.listen([](PHLMONITOR monitor) { g_canvas.onPreRender(monitor); }));
+    g_listeners.push_back(events.render.pre.listen([](PHLMONITOR monitor) {
+        g_canvas.onPreRender(monitor);
+        // While the canvas is up it swallows pointer moves, so Hyprland's
+        // record of the last one stays put and it doesn't report moving back
+        // to that spot; the corner reads the pointer each frame instead.
+        if (g_canvas.live())
+            g_hotCorner.onMouseMove(g_pInputManager->getMouseCoordsInternal());
+    }));
     g_listeners.push_back(events.render.stage.listen([](eRenderStage stage) { Expanse::Render::onStage(stage); }));
-    g_listeners.push_back(events.input.mouse.move.listen([CANCEL](Vector2D pos, Event::SCallbackInfo& info) { CANCEL(g_canvas.onMouseMove(pos), info); }));
-    g_listeners.push_back(events.input.mouse.button.listen(
-        [CANCEL](IPointer::SButtonEvent event, Event::SCallbackInfo& info) { CANCEL(g_canvas.onMouseButton(event.button, event.state == WL_POINTER_BUTTON_STATE_PRESSED), info); }));
+    g_listeners.push_back(events.input.mouse.move.listen([CANCEL](Vector2D pos, Event::SCallbackInfo& info) {
+        g_hotCorner.onMouseMove(pos);
+        CANCEL(g_canvas.onMouseMove(pos), info);
+    }));
+    g_listeners.push_back(events.input.mouse.button.listen([CANCEL](IPointer::SButtonEvent event, Event::SCallbackInfo& info) {
+        g_hotCorner.onButton(event.state == WL_POINTER_BUTTON_STATE_PRESSED);
+        CANCEL(g_canvas.onMouseButton(event.button, event.state == WL_POINTER_BUTTON_STATE_PRESSED), info);
+    }));
     g_listeners.push_back(events.input.mouse.axis.listen([CANCEL](IPointer::SAxisEvent event, Event::SCallbackInfo& info) { CANCEL(g_canvas.onAxis(event), info); }));
     g_listeners.push_back(events.gesture.pinch.begin.listen([CANCEL](IPointer::SPinchBeginEvent, Event::SCallbackInfo& info) { CANCEL(g_canvas.onPinchBegin(), info); }));
     g_listeners.push_back(
@@ -223,6 +245,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
+    g_hotCorner.stop();
     Expanse::Render::shutdown();
     // As quitting does on the Mac: the layout is saved, and windows go back.
     g_canvas.shutdown();

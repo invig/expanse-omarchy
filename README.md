@@ -10,7 +10,7 @@ Built and tested on Omarchy (Hyprland 0.56.2, aarch64) in [Try Omarchy](https://
 
 | Input | What it does |
 | --- | --- |
-| <kbd>Alt</kbd> + <kbd>`</kbd>, or <kbd>Alt</kbd> + pinch in | Zoom out to every window, and back to where you were |
+| <kbd>Alt</kbd> + <kbd>`</kbd>, <kbd>Alt</kbd> + pinch in, or rest the pointer in a bottom corner | Zoom out to every window, and back to where you were |
 | Click a window | Glide to it, centred at 100%, and use it |
 | <kbd>Super</kbd> + arrows | Glide to the nearest window in that direction; on the canvas, plain arrows |
 | Pinch, or <kbd>Super</kbd> + scroll | Zoom the canvas around the pointer |
@@ -62,6 +62,12 @@ dofile("/path/to/expanse-hypr/examples/expanse.lua")
 ```
 
 [examples/expanse.lua](examples/expanse.lua) floats every window from its first frame (a window rule; without it, a tiled window floats where it is when the canvas first touches it) and binds <kbd>Alt</kbd> + <kbd>`</kbd>, <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>`</kbd> and <kbd>Super</kbd> + arrows, with descriptions for Omarchy's key guide. `hl.plugin.expanse.overview()`, `hop("left")`, `tidy()` and `auto_centre()` return their actions, like `hl.dsp.*`, so they work in `hl.bind` and `hyprctl dispatch` alike.
+
+The hot corner is `plugin:expanse:hot_corner`: `bottom` (both bottom corners, the default, since Omarchy's bar has its menu top left), `all`, `top_left`, `top_right`, `bottom_left`, `bottom_right` or `off`:
+
+```lua
+hl.config({ plugin = { expanse = { hot_corner = "all" } } })
+```
 
 `hyprpm` isn't installed on Omarchy; [hyprpm.toml](hyprpm.toml) is ready for when it is (`hyprpm add <this repo>`, `hyprpm enable expanse`).
 

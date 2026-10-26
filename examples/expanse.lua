@@ -21,6 +21,11 @@ end
 -- into free space beside what you were working on.
 hl.window_rule({ name = "expanse-canvas", match = { modal = false }, float = true })
 
+-- Resting the pointer in a corner zooms out too: "bottom" (the default; the
+-- bar has Omarchy's menu top left), "all", "top_left", "top_right",
+-- "bottom_left", "bottom_right" or "off".
+-- hl.config({ plugin = { expanse = { hot_corner = "bottom" } } })
+
 -- ALT + ` zooms out to every window and back, as on the Mac.
 bind("ALT + grave", "Zoom out to every window", hl.plugin.expanse.overview())
 
