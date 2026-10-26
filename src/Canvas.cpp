@@ -2,6 +2,7 @@
 
 #include "Canvas.hpp"
 
+#include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
@@ -78,6 +79,27 @@ namespace Expanse {
         return WLSURFACE ? Desktop::View::CWindow::fromView(WLSURFACE->view()) : nullptr;
     }
 
+    // Keyboard glides replace Hyprland's movefocus, which carries the pointer
+    // onto the window it focuses (unless cursor:no_warps), so focus that
+    // follows the mouse doesn't snap back to whatever slid under the pointer.
+    // Mirrors its switchToWindow(), which plugins can't call.
+    static void focusLikeMoveFocus(PHLWINDOW window) {
+        static auto PNOWARPS     = CConfigValue<Config::INTEGER>("cursor:no_warps");
+        static auto PFOLLOWMOUSE = CConfigValue<Config::INTEGER>("input:follow_mouse");
+
+        if (const auto LAST = Desktop::focusState()->window(); LAST && !*PNOWARPS)
+            LAST->m_relativeCursorCoordsOnLastWarp = g_pInputManager->getMouseCoordsInternal() - LAST->layoutBox().pos();
+
+        Desktop::focusState()->fullWindowFocus(window, Desktop::FOCUS_REASON_KEYBIND);
+        window->warpCursor();
+
+        if (*PNOWARPS == 0 || *PFOLLOWMOUSE < 2) {
+            g_pInputManager->m_forcedFocus = window;
+            g_pInputManager->simulateMouseMovement();
+            g_pInputManager->m_forcedFocus.reset();
+        }
+    }
+
     std::optional<eDirection> parseDirection(const std::string& text) {
         if (text == "left" || text == "l")
             return DIRECTION_LEFT;
@@ -128,7 +150,7 @@ namespace Expanse {
         animateTo(homeCamera(), STATE_GLIDING, CLOSE_SECONDS);
     }
 
-    void CCanvas::glideTo(PHLWINDOW window) {
+    void CCanvas::glideTo(PHLWINDOW window, bool fromKeyboard) {
         if (!window)
             return;
 
@@ -138,8 +160,9 @@ namespace Expanse {
         if (!isCanvasWindow(window))
             return;
 
-        m_target = window;
-        m_hover  = window;
+        m_target       = window;
+        m_hover        = window;
+        m_fromKeyboard = fromKeyboard;
         // On top for the whole glide, not only once it lands.
         if (const auto TARGET = window->layoutTarget())
             g_layoutManager->bringTargetToTop(TARGET);
@@ -147,11 +170,11 @@ namespace Expanse {
         animateTo(cameraFor(window), STATE_GLIDING, m_camera.scale > 0.99 ? HOP_SECONDS : GLIDE_SECONDS);
     }
 
-    void CCanvas::glideLater(PHLWINDOW window) {
+    void CCanvas::glideLater(PHLWINDOW window, bool fromKeyboard) {
         // Out of the event that asked for it: gliding floats and moves windows.
-        g_pEventLoopManager->doLater([this, ref = PHLWINDOWREF{window}] {
+        g_pEventLoopManager->doLater([this, ref = PHLWINDOWREF{window}, fromKeyboard] {
             if (const auto WINDOW = ref.lock(); WINDOW && !live() && isCanvasWindow(WINDOW) && !fullyVisible(WINDOW))
-                glideTo(WINDOW);
+                glideTo(WINDOW, fromKeyboard);
         });
     }
 
@@ -161,7 +184,7 @@ namespace Expanse {
                 // Mid-glide: hop on from the window it's heading to, straight away.
                 const auto CURRENT = m_target.lock();
                 if (const auto NEXT = CURRENT ? nearest(direction, canvasBox(CURRENT), CURRENT) : nullptr)
-                    glideTo(NEXT);
+                    glideTo(NEXT, true);
                 return;
             }
             case STATE_OPENING:
@@ -182,7 +205,7 @@ namespace Expanse {
                 const auto FOCUSED = Desktop::focusState()->window();
                 const bool HAS     = isCanvasWindow(FOCUSED);
                 if (const auto NEXT = nearest(direction, HAS ? canvasBox(FOCUSED) : viewCentre(), HAS ? FOCUSED : nullptr))
-                    glideTo(NEXT);
+                    glideTo(NEXT, true);
                 return;
             }
         }
@@ -275,7 +298,10 @@ namespace Expanse {
         m_state  = STATE_IDLE;
 
         if (const auto TARGET = m_target.lock(); TARGET && TARGET->m_isMapped) {
-            Desktop::focusState()->fullWindowFocus(TARGET, Desktop::FOCUS_REASON_CLICK);
+            if (m_fromKeyboard)
+                focusLikeMoveFocus(TARGET);
+            else
+                Desktop::focusState()->fullWindowFocus(TARGET, Desktop::FOCUS_REASON_CLICK);
             if (const auto LAYOUTTARGET = TARGET->layoutTarget())
                 g_layoutManager->bringTargetToTop(LAYOUTTARGET);
         }
@@ -332,7 +358,7 @@ namespace Expanse {
             if (pressed)
                 m_press = {POS, windowUnderPointer()};
             else if (const auto WINDOW = m_press.window.lock(); WINDOW && POS.distance(m_press.pos) <= CLICK_SLOP && !fullyVisible(WINDOW))
-                glideLater(WINDOW);
+                glideLater(WINDOW, false);
             return false;
         }
 
@@ -367,7 +393,7 @@ namespace Expanse {
         else if (keycode == KEY_ENTER || keycode == KEY_KPENTER) {
             const auto WINDOW = m_hover.lock();
             if (WINDOW && isCanvasWindow(WINDOW))
-                glideTo(WINDOW);
+                glideTo(WINDOW, true);
             else
                 close();
         } else if (g_pInputManager->getModsFromAllKBs() & (HL_MODIFIER_META | HL_MODIFIER_ALT | HL_MODIFIER_CTRL))
@@ -385,7 +411,7 @@ namespace Expanse {
             return;
 
         if (isCanvasWindow(window) && !fullyVisible(window))
-            glideLater(window);
+            glideLater(window, true);
     }
 
     bool CCanvas::live() const {

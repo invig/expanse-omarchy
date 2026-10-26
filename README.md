@@ -11,7 +11,7 @@ Early: zoom out and pick, and hopping between windows. Built and tested on Omarc
 | Keys | Action |
 | --- | --- |
 | <kbd>Alt</kbd> + <kbd>`</kbd> | Zoom out to every window, and back |
-| <kbd>Ctrl</kbd> + arrows | Glide to the nearest window that way, centred, and focus it. Zoomed out, the highlight moves and the view follows |
+| <kbd>Super</kbd> + arrows | Glide to the nearest window that way, centred, and focus it. Zoomed out, the highlight moves and the view follows |
 | Click a window that isn't fully on screen | Glide to centre it |
 | Click a window (zoomed out) | Glide to it at 100% and focus it |
 | <kbd>Return</kbd> (zoomed out) | Glide to the highlighted window |
@@ -19,9 +19,9 @@ Early: zoom out and pick, and hopping between windows. Built and tested on Omarc
 
 The nearest window that way is the one Expanse on the Mac picks: a window sharing the row (or column) wins, nearest first; failing that, the closest within ~35° of straight that way. A hop pressed mid-glide hops on from the window the glide is heading to.
 
-Focus moved from the keyboard (Omarchy's <kbd>Super</kbd> + arrows, Alt-Tab) also centres a window that isn't fully on screen. Focus that follows the mouse never moves the canvas.
+<kbd>Super</kbd> + arrows take over from Omarchy's focus keys (Hyprland's `movefocus`), which do the same job on a canvas less well: they pick by angle between centres, never centre the window, and can't chain. Hyprland fires every bind on a key, so the example config unbinds those four first. Like `movefocus`, a hop lands with the pointer on the window (unless `cursor:no_warps`), so focus that follows the mouse stays put; a click-centre leaves the pointer where you clicked. <kbd>Ctrl</kbd> + arrows stay with apps for word-jump.
 
-<kbd>Ctrl</kbd> + <kbd>←</kbd> <kbd>→</kbd> is word-jump in terminals, browsers and editors on Linux, and the bind takes it from them. To hop with <kbd>Super</kbd> + arrows instead (replacing Omarchy's focus keys), change `hop_prefix` in [examples/expanse.lua](examples/expanse.lua).
+Focus moved from the keyboard (Alt-Tab, other binds) also centres a window that isn't fully on screen. Focus that follows the mouse never moves the canvas.
 
 ## How it works
 
@@ -46,7 +46,7 @@ hl.plugin.load("/path/to/expanse-hypr/expanse.so")
 dofile("/path/to/expanse-hypr/examples/expanse.lua")
 ```
 
-[examples/expanse.lua](examples/expanse.lua) binds <kbd>Alt</kbd> + <kbd>`</kbd> and <kbd>Ctrl</kbd> + arrows. `hl.plugin.expanse.overview()` and `hl.plugin.expanse.hop("left")` return their actions, like `hl.dsp.*`, so they work in `hl.bind` and `hyprctl dispatch` alike.
+[examples/expanse.lua](examples/expanse.lua) binds <kbd>Alt</kbd> + <kbd>`</kbd> and <kbd>Super</kbd> + arrows, with descriptions for Omarchy's key guide. `hl.plugin.expanse.overview()` and `hl.plugin.expanse.hop("left")` return their actions, like `hl.dsp.*`, so they work in `hl.bind` and `hyprctl dispatch` alike.
 
 `hyprpm` isn't installed on Omarchy; [hyprpm.toml](hyprpm.toml) is ready for when it is (`hyprpm add <this repo>`, `hyprpm enable expanse`).
 

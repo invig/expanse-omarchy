@@ -11,13 +11,20 @@ if not (hl.plugin.expanse and hl.plugin.expanse.overview) then
   return
 end
 
--- ALT + ` zooms out to every window and back, as on the Mac.
-hl.bind("ALT + grave", hl.plugin.expanse.overview())
+-- Omarchy's o.bind also lists bindings in its key guide; elsewhere, plain binds.
+local bind = (o and o.bind) or function(keys, _description, action)
+  hl.bind(keys, action)
+end
 
--- CTRL + arrows hop to the nearest window that way, as ⌃ + arrows on the Mac.
--- On Linux, CTRL + left/right is also word-jump in terminals, browsers and
--- editors; for SUPER + arrows (Omarchy's focus keys) instead, change the prefix.
-local hop_prefix = "CTRL + "
+-- ALT + ` zooms out to every window and back, as on the Mac.
+bind("ALT + grave", "Zoom out to every window", hl.plugin.expanse.overview())
+
+-- SUPER + arrows hop to the nearest window that way, as ⌃ + arrows on the Mac.
+-- They replace Omarchy's focus keys (movefocus), which do the same job on a
+-- canvas less well; Hyprland fires every bind on a key, so those go first.
+-- CTRL + arrows stay with apps (word-jump).
 for _, direction in ipairs({ "left", "right", "up", "down" }) do
-  hl.bind(hop_prefix .. direction, hl.plugin.expanse.hop(direction))
+  hl.unbind("SUPER + " .. direction)
+  bind("SUPER + " .. direction, "Hop to the window " .. (direction == "up" and "above" or direction == "down" and "below" or "on the " .. direction),
+    hl.plugin.expanse.hop(direction))
 end

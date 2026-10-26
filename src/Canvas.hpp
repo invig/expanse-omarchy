@@ -41,7 +41,7 @@ namespace Expanse {
         void                   toggle();
         void                   open();
         void                   close();
-        void                   glideTo(PHLWINDOW window);
+        void                   glideTo(PHLWINDOW window, bool fromKeyboard = false);
         void                   hop(eDirection direction);
         bool                   pickAt(const Vector2D& pos); // a click at a global logical point
 
@@ -76,7 +76,7 @@ namespace Expanse {
         CBox                   viewCentre() const;
         bool                   fullyVisible(PHLWINDOW window) const;
         PHLWINDOW              nearest(eDirection direction, const CBox& from, PHLWINDOW exclude) const;
-        void                   glideLater(PHLWINDOW window);
+        void                   glideLater(PHLWINDOW window, bool fromKeyboard);
         void                   animateTo(const SCamera& to, eState state, double seconds);
         void                   floatTiledWindows();
         void                   commit();
@@ -86,8 +86,9 @@ namespace Expanse {
         PHLWINDOWREF           m_hover;
         PHLWINDOWREF           m_target;
 
-        eState                 m_state     = STATE_IDLE;
-        bool                   m_animating = false;
+        eState                 m_state        = STATE_IDLE;
+        bool                   m_animating    = false;
+        bool                   m_fromKeyboard = false; // the glide lands like Hyprland's movefocus
         SCamera                m_camera;
         SCamera                m_from;
         SCamera                m_to;
