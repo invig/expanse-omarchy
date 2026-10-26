@@ -1,0 +1,11 @@
+[repository]
+name = "expanse-hypr"
+authors = ["Matthew Salmon"]
+
+[expanse]
+description = "Expanse: an infinite, zoomable canvas for your windows"
+authors = ["Matthew Salmon"]
+output = "expanse.so"
+build = [
+    "make all",
+]
