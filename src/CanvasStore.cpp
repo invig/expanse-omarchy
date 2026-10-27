@@ -40,7 +40,8 @@ namespace Expanse {
     }
 
     void CCanvas::noteOriginal(PHLWINDOW window) {
-        if (!window || std::ranges::any_of(m_originals, [&](const STracked& o) { return o.window.lock() == window; }))
+        // Full screen, its box is the screen's: it's noted once it's back on the canvas.
+        if (!window || Fullscreen::controller()->isFullscreen(window) || std::ranges::any_of(m_originals, [&](const STracked& o) { return o.window.lock() == window; }))
             return;
         const auto TARGET = window->layoutTarget();
         if (!TARGET)
@@ -201,7 +202,8 @@ namespace Expanse {
                                           .app       = window->m_initialClass,
                                           .title     = Store::titleKey(window->m_initialTitle),
                                           .workspace = window->m_workspace->m_name,
-                                          .frame     = goalBox(window).translate(scrolledFor(window->m_workspace)),
+                                          .frame     = Fullscreen::controller()->isFullscreen(window) ? CBox{IT->home, IT->preferred} :
+                                                                                                           goalBox(window).translate(scrolledFor(window->m_workspace)),
                                           .wasTiled  = IT->wasTiled,
                                           .original  = IT->box,
                                           .preferred = IT->preferred,

@@ -90,7 +90,7 @@ namespace Expanse {
         void                   glideTo(PHLWINDOW window, bool fromKeyboard = false);
         void                   hop(eDirection direction);
         bool                   pickAt(const Vector2D& pos); // a click at a global logical point
-        void                   switchTo(PHLWORKSPACE workspace); // the canvas comes along, zoomed out
+        bool                   switchTo(PHLWORKSPACE workspace); // the canvas comes along, zoomed out
 
         // Camera, on the canvas
         void                   pan(const Vector2D& screenDelta); // moves the content by this much

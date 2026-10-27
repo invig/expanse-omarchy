@@ -257,10 +257,17 @@ namespace Expanse {
                 // window already on screen looked like nothing happened.
                 const auto FOCUSED = Desktop::focusState()->window();
                 const bool HAS     = isCanvasWindow(FOCUSED);
-                // From a full-screen window, the way is measured from its spot on the canvas.
+                // From a full-screen window, the way is measured from its spot
+                // on the canvas, which it goes back to as the hop starts.
                 const bool FULLSCREEN = HAS && Fullscreen::controller()->isFullscreen(FOCUSED);
-                if (FULLSCREEN && !begin())
-                    return;
+                if (FULLSCREEN) {
+                    // Nothing that way from where it was: it stays full screen, untouched.
+                    if (const auto* ENTRY = tracked(FOCUSED);
+                        ENTRY && !nearest(direction, CBox{ENTRY->home - scrolledFor(FOCUSED->m_workspace), ENTRY->preferred}, FOCUSED))
+                        return;
+                    if (!begin())
+                        return;
+                }
                 if (const auto NEXT = nearest(direction, HAS ? canvasBox(FOCUSED) : viewCentre(), HAS ? FOCUSED : nullptr))
                     glideTo(NEXT, true);
                 else if (FULLSCREEN)
@@ -430,6 +437,14 @@ namespace Expanse {
         }
 
         settle(m_camera);
+
+        // You went to another workspace as the glide ended (before the canvas
+        // could follow): focusing the window would take you back.
+        if (MONITOR->m_activeWorkspace != m_workspace.lock()) {
+            reset();
+            scheduleSave();
+            return;
+        }
 
         m_camera = homeCamera();
         m_state  = STATE_IDLE;
@@ -812,6 +827,9 @@ namespace Expanse {
     }
 
     bool CCanvas::fullyVisible(PHLWINDOW window) const {
+        // Full screen covers the bar's strip too, and is on screen by definition.
+        if (Fullscreen::controller()->isFullscreen(window))
+            return true;
         const CBox AREA = usableArea().expand(1);
         const CBox BOX  = screenBox(window);
         return BOX.x >= AREA.x && BOX.y >= AREA.y && BOX.x + BOX.w <= AREA.x + AREA.w && BOX.y + BOX.h <= AREA.y + AREA.h;

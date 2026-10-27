@@ -68,10 +68,10 @@ namespace Expanse {
         });
 
         // To the minimap's left, smaller if they wouldn't fit.
-        const double ROOM  = MAP->box.x - BAR_GAP - (MONITOR->m_position.x + EDGE);
-        const double WIDE  = TILE_GAP + workspaces.size() * (TILE_SIZE.x + TILE_GAP);
-        const double SHRINK = std::clamp((ROOM - TILE_GAP) / (WIDE - TILE_GAP), 0.3, 1.0);
-        const Vector2D TILE = TILE_SIZE * SHRINK;
+        const double   COUNT  = workspaces.size();
+        const double   ROOM   = MAP->box.x - BAR_GAP - (MONITOR->m_position.x + EDGE);
+        const double   SHRINK = std::clamp((ROOM - TILE_GAP - COUNT * TILE_GAP) / (COUNT * TILE_SIZE.x), 0.3, 1.0);
+        const Vector2D TILE   = TILE_SIZE * SHRINK;
 
         SSpacesBar bar;
         bar.box.w = TILE_GAP + workspaces.size() * (TILE.x + TILE_GAP);
@@ -117,19 +117,23 @@ namespace Expanse {
         return bar;
     }
 
-    void CCanvas::switchTo(PHLWORKSPACE target) {
-        if (m_paused || !target || target->m_isSpecialWorkspace)
-            return;
+    bool CCanvas::switchTo(PHLWORKSPACE target) {
+        // A workspace on another monitor has no tile here: the canvas stays on this one.
+        if (m_paused || !target || target->m_isSpecialWorkspace || target->m_monitor != monitor())
+            return false;
         if (!live())
             open();
-        if (!live() || target == workspace())
-            return;
+        if (!live())
+            return false;
+        if (target == workspace())
+            return true;
         // Out of the event that asked for it; the canvas follows once Hyprland
         // has switched (onWorkspaceChanged), as it does for a workspace bind.
         g_pEventLoopManager->doLater([ref = PHLWORKSPACEREF{target}] {
             if (const auto WORKSPACE = ref.lock(); WORKSPACE && !WORKSPACE->inert())
                 (void)Config::Actions::changeWorkspace(WORKSPACE); // failing, the canvas stays where it is
         });
+        return true;
     }
 
     void CCanvas::onWorkspaceChanged(PHLWORKSPACE target) {

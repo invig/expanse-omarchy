@@ -179,7 +179,8 @@ static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
                 match = workspace.lock();
         if (!match)
             return std::format("no workspace named {}\n", name);
-        g_canvas.switchTo(match);
+        if (!g_canvas.switchTo(match))
+            return std::format("workspace {} isn't on the canvas's monitor\n", name);
     } else if (verb == "select") {
         g_canvas.selectAll();
     } else if (verb == "autocentre" || verb == "autocenter") {
