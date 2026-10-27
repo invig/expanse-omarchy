@@ -10,6 +10,7 @@
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/Texture.hpp>
 #include <hyprland/src/render/pass/BorderPassElement.hpp>
+#include <hyprland/src/render/pass/PassElement.hpp>
 #include <hyprland/src/render/pass/RectPassElement.hpp>
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 
@@ -74,6 +75,12 @@ namespace Expanse::Render {
     static const CHyprColor LABEL_QUIET  = {0.75F, 0.75F, 0.75F, 0.9F};
     static const CHyprColor PLAIN_BACKGROUND = {0.13F, 0.13F, 0.13F, 1.F}; // the canvas without the desktop picture
     constexpr float         DIM_ALPHA    = 0.45F;
+    // Expanse's shadow is black at 22%, 14 pt of blur, 6 pt down. Hyprland's
+    // shader fades out over its whole range, so it reaches twice the blur
+    // radius and starts darker, to look the same.
+    constexpr float         SHADOW_ALPHA  = 0.4F;
+    constexpr double        SHADOW_RADIUS = 28.0;
+    constexpr double        SHADOW_OFFSET = 6.0;
     constexpr double        LABEL_PT     = 11.0;
     constexpr double        LABEL_GAP    = 5.0;
     constexpr double        LABEL_MIN    = 70.0; // narrower on screen, a window shows no label
@@ -121,13 +128,89 @@ namespace Expanse::Render {
         add(makeUnique<CRectPassElement>(rect));
     }
 
-    static void addBorder(const CBox& px, const CHyprColor& color, int width, int round) {
+    // Hyprland draws a border outside its box, `points` wide.
+    static void addBorder(const CBox& px, const CHyprColor& color, int points, int round) {
         CBorderPassElement::SBorderData border;
         border.box        = px;
         border.grad1      = Config::CGradientValueData{color};
-        border.borderSize = width;
-        border.round      = round;
-        border.outerRound = round + width;
+        border.borderSize = points;
+        border.round      = std::max(round, 0);
+        add(makeUnique<CBorderPassElement>(border));
+    }
+
+    // A line just inside the box, as a Core Animation layer's border.
+    static void addOutline(const PHLMONITOR& monitor, const CBox& px, const CHyprColor& color, int points, int round) {
+        const double INSET = points * monitor->m_scale;
+        addBorder(px.copy().expand(-INSET), color, points, round - INSET);
+    }
+
+    // Expanse's window shadow, through Hyprland's shadow shader. A pass
+    // element of our own: Hyprland's needs a window decoration.
+    class CShadowElement : public IPassElement {
+      public:
+        CShadowElement(const CBox& px, int round, float roundingPower, int range, float alpha) :
+            m_box(px), m_round(round), m_roundingPower(roundingPower), m_range(range), m_alpha(alpha) {}
+
+        std::vector<UP<IPassElement>> draw() override {
+            g_pHyprRenderer->disableScissor();
+            g_pHyprRenderer->blend(true);
+            g_pHyprRenderer->drawShadow(m_box, m_round, m_roundingPower, m_range, Config::CGradientValueData{CHyprColor{0.F, 0.F, 0.F, 1.F}}, m_alpha);
+            return {};
+        }
+        bool needsLiveBlur() override {
+            return false;
+        }
+        bool needsPrecomputeBlur() override {
+            return false;
+        }
+        const char* passName() override {
+            return "CExpanseShadowElement";
+        }
+        ePassElementType type() override {
+            return EK_CUSTOM;
+        }
+
+      private:
+        CBox  m_box;
+        int   m_round;
+        float m_roundingPower;
+        int   m_range;
+        float m_alpha;
+    };
+
+    // As on the Mac, in canvas units so it shrinks with the window. It fades
+    // in as you zoom out: Omarchy's windows have no shadow at 100%.
+    static void addShadow(const PHLMONITOR& monitor, const PHLWINDOW& window, const CBox& screen, double scale, float shown) {
+        if (shown <= 0.F)
+            return;
+        const double S     = monitor->m_scale;
+        const double RANGE = std::max(1.0, SHADOW_RADIUS * scale);
+        const CBox   BOX   = screen.copy().expand(RANGE).translate({0.0, SHADOW_OFFSET * scale});
+        add(makeUnique<CShadowElement>(toPixels(BOX, monitor), std::round((window->rounding() * scale + RANGE) * S), window->roundingPower(), std::round(RANGE * S),
+                                       SHADOW_ALPHA * shown));
+    }
+
+    // The window's own border, in its theme's colours, where the camera puts
+    // it: Hyprland lays its decorations out for the window's real box, so the
+    // windows are drawn without them.
+    static void addWindowBorder(const PHLMONITOR& monitor, const PHLWINDOW& window, const CBox& screen, double scale) {
+        const int SIZE = window->getRealBorderSize();
+        if (SIZE <= 0)
+            return;
+        CBorderPassElement::SBorderData border;
+        border.box           = toPixels(screen, monitor);
+        border.grad1         = window->m_realBorderColor;
+        border.borderSize    = SIZE;
+        border.round         = std::round(window->rounding() * scale * monitor->m_scale);
+        border.roundingPower = window->roundingPower();
+        border.a             = window->effectiveAlpha();
+        border.window        = window;
+        if (window->m_borderFadeAnimationProgress->isBeingAnimated()) {
+            border.hasGrad2 = true;
+            border.grad1    = window->m_realBorderColorPrevious;
+            border.grad2    = window->m_realBorderColor;
+            border.lerp     = window->m_borderFadeAnimationProgress->value();
+        }
         add(makeUnique<CBorderPassElement>(border));
     }
 
@@ -192,18 +275,17 @@ namespace Expanse::Render {
     // As on the Mac: a dark panel, windows as light blocks, the view outlined,
     // the zoom underneath.
     static void addMinimap(const PHLMONITOR& monitor, const SMinimap& map, double scale) {
-        const double S    = monitor->m_scale;
-        const int    LINE = std::max(1, sc<int>(std::round(S)));
-        const CBox   BOX  = toPixels(map.box, monitor);
+        const double S   = monitor->m_scale;
+        const CBox   BOX = toPixels(map.box, monitor);
         addRect(BOX, CHyprColor{0.12F, 0.12F, 0.12F, 0.88F}, std::round(12 * S));
-        addBorder(BOX.copy().expand(-LINE), CHyprColor{1.F, 1.F, 1.F, 0.08F}, LINE, std::round(12 * S) - LINE);
+        addOutline(monitor, BOX, CHyprColor{1.F, 1.F, 1.F, 0.08F}, 1, std::round(12 * S));
 
         for (const auto& window : map.windows)
             addRect(toPixels(map.toScreen(window), monitor), CHyprColor{0.85F, 0.85F, 0.85F, 0.75F}, std::round(1.5 * S));
 
         const CBox VIEW = toPixels(map.toScreen(map.viewport), monitor);
         addRect(VIEW, CHyprColor{1.F, 1.F, 1.F, 0.06F}, std::round(2 * S));
-        addBorder(VIEW.copy().expand(-LINE), CHyprColor{1.F, 1.F, 1.F, 0.9F}, LINE, std::round(2 * S));
+        addOutline(monitor, VIEW, CHyprColor{1.F, 1.F, 1.F, 0.9F}, 1, std::round(2 * S));
 
         if (refresh(g_zoomText, std::format("{}%", sc<int>(std::round(scale * 100))), std::round(10 * S), 0, CHyprColor{1.F, 1.F, 1.F, 0.7F}, false))
             addTexture(g_zoomText.tex, Vector2D{BOX.x + 10 * S, BOX.y + BOX.h - 7 * S - g_zoomText.tex->m_size.y}.round());
@@ -217,11 +299,10 @@ namespace Expanse::Render {
     // underneath. The one you're on is outlined in the accent; the one under
     // the pointer lights up.
     static void addSpacesBar(const PHLMONITOR& monitor, const SSpacesBar& bar) {
-        const double S    = monitor->m_scale;
-        const int    LINE = std::max(1, sc<int>(std::round(S)));
-        const CBox   BOX  = toPixels(bar.box, monitor);
+        const double S   = monitor->m_scale;
+        const CBox   BOX = toPixels(bar.box, monitor);
         addRect(BOX, CHyprColor{0.12F, 0.12F, 0.12F, 0.88F}, std::round(12 * S));
-        addBorder(BOX.copy().expand(-LINE), CHyprColor{1.F, 1.F, 1.F, 0.08F}, LINE, std::round(12 * S) - LINE);
+        addOutline(monitor, BOX, CHyprColor{1.F, 1.F, 1.F, 0.08F}, 1, std::round(12 * S));
 
         if (refresh(g_spacesHeading, "Workspaces", std::round(10 * S), 0, CHyprColor{1.F, 1.F, 1.F, 0.55F}, false))
             addTexture(g_spacesHeading.tex, Vector2D{BOX.x + 12 * S, BOX.y + 9 * S}.round());
@@ -237,8 +318,7 @@ namespace Expanse::Render {
             for (const auto& window : tile.windows)
                 addRect(toPixels(window, monitor), CHyprColor{0.85F, 0.85F, 0.85F, 0.8F * SHOWN}, std::round(S));
 
-            const int WIDTH = tile.current ? 2 * LINE : LINE;
-            addBorder(TILE.copy().expand(-WIDTH), tile.current ? ACCENT : CHyprColor{1.F, 1.F, 1.F, tile.hovered ? 0.7F : 0.15F}, WIDTH, ROUND - WIDTH);
+            addOutline(monitor, TILE, tile.current ? ACCENT : CHyprColor{1.F, 1.F, 1.F, tile.hovered ? 0.7F : 0.15F}, tile.current ? 2 : 1, ROUND);
 
             if (refresh(g_spaceNames[i], tile.name, std::round(10 * S), std::round(TILE.w + 4 * S), CHyprColor{1.F, 1.F, 1.F, 0.8F}, false))
                 addTexture(g_spaceNames[i].tex, Vector2D{TILE.x + (TILE.w - g_spaceNames[i].tex->m_size.x) / 2, TILE.y + TILE.h + 7 * S}.round());
@@ -324,17 +404,17 @@ namespace Expanse::Render {
             window->m_animatingIn                = true;
             (*size).*robbed(SBeingAnimatedTag{}) = true;
 
+            addShadow(MONITOR, window, screens[i], g_canvas.scale(), SHOWN);
             renderWindow(window, MONITOR, g_frame.now);
+            addWindowBorder(MONITOR, window, screens[i], g_canvas.scale());
 
             if (!DECORATED)
                 continue;
 
-            // Details stay the same size on screen at any zoom.
+            // Details stay the same size on screen at any zoom; the ring covers the border.
             const bool SELECTED = g_canvas.isSelected(window);
-            if (SELECTED || window == HOVER) {
-                const int WIDTH = std::round((SELECTED ? 3.0 : 2.0) * MONITOR->m_scale);
-                addBorder(toPixels(screens[i], MONITOR), ACCENT, WIDTH, std::round(window->rounding() * g_canvas.scale() * MONITOR->m_scale));
-            }
+            if (SELECTED || window == HOVER)
+                addBorder(toPixels(screens[i], MONITOR), ACCENT, SELECTED ? 3 : 2, std::round(window->rounding() * g_canvas.scale() * MONITOR->m_scale));
             if (closes[i])
                 addCloseButton(MONITOR, screens[i]);
             addLabel(MONITOR, window, screens[i], window == HOVER, PLAIN);
@@ -345,7 +425,7 @@ namespace Expanse::Render {
 
         if (SELECTIONBOUNDS) {
             const CBox SCREEN{g_canvas.toScreen(SELECTIONBOUNDS->pos()), SELECTIONBOUNDS->size() * g_canvas.scale()};
-            addBorder(toPixels(SCREEN.copy().expand(8), MONITOR), ACCENT.modifyA(0.7F), std::max(1, sc<int>(std::round(MONITOR->m_scale))), std::round(6 * MONITOR->m_scale));
+            addBorder(toPixels(SCREEN.copy().expand(8), MONITOR), ACCENT.modifyA(0.7F), 1, std::round(6 * MONITOR->m_scale));
         }
 
         for (const auto& guide : GUIDES)
@@ -354,7 +434,7 @@ namespace Expanse::Render {
         if (MARQUEE) {
             const CBox PIXELS = toPixels(*MARQUEE, MONITOR);
             addRect(PIXELS, ACCENT.modifyA(0.12F));
-            addBorder(PIXELS, ACCENT, std::max(1, sc<int>(std::round(MONITOR->m_scale))), 0);
+            addBorder(PIXELS, ACCENT, 1, 0);
         }
 
         if (MINIMAP)
