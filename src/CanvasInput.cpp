@@ -1,7 +1,11 @@
 #define WLR_USE_UNSTABLE
 
 #include "Canvas.hpp"
+#include "Later.hpp"
+#include "Toast.hpp"
 
+#include <hyprland/src/config/shared/actions/ConfigActions.hpp>
+#include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/view/LayerSurface.hpp>
 #include <hyprland/src/desktop/view/WLSurface.hpp>
@@ -10,6 +14,12 @@
 #include <hyprland/src/layout/target/Target.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
+#include <hyprland/src/output/Monitor.hpp>
+#include <hyprland/src/pointer/cursor/CursorShapeOverrideController.hpp>
+#include <hyprland/src/state/MonitorState.hpp>
+#include <hyprland/src/Compositor.hpp>
+
+#include <wayland-server-core.h>
 
 #include <linux/input-event-codes.h>
 
@@ -26,6 +36,14 @@ namespace Expanse {
     constexpr double WHEEL_PAN   = 4.0;  // per unit of wheel delta (15 a notch)
     constexpr double WHEEL_ZOOM  = 0.008;
     constexpr double FINGER_ZOOM = 0.006;
+    constexpr int    FOCUS_SETTLE_MS = 120;   // as on the Mac
+    constexpr double PARKED_SHOWING  = 48.0;  // less of a window on screen than this, it's off-screen
+    // Momentum: what's left of the speed after a millisecond (UIKit's normal
+    // rate), the slowest pan that coasts, and the stretch of the gesture its
+    // speed is read from.
+    constexpr double COAST_DECAY  = 0.998;
+    constexpr double COAST_MIN    = 60.0; // px a second
+    constexpr auto   COAST_WINDOW = std::chrono::milliseconds(80);
 
     static uint32_t mods() {
         return g_pInputManager->getModsFromAllKBs();
@@ -47,6 +65,13 @@ namespace Expanse {
 
     // Over the empty desktop: nothing, or only the wallpaper and other
     // background / bottom layers, under the pointer.
+    static PHLMONITOR monitorAt(const Vector2D& pos) {
+        for (const auto& monitor : State::monitorState()->monitors())
+            if (monitor && monitor->m_enabled && CBox{monitor->m_position, monitor->m_size}.containsPoint(pos))
+                return monitor;
+        return nullptr;
+    }
+
     static bool pointerOnDesktop() {
         const auto SURFACE = g_pSeatManager->m_state.pointerFocus.lock();
         if (!SURFACE)
@@ -62,8 +87,18 @@ namespace Expanse {
     }
 
     bool CCanvas::onMouseMove(const Vector2D& pos) {
-        if (!live())
+        if (!live()) {
+            // The workspaces bar on the desktop lights the tile under the pointer.
+            const auto MONITOR = m_paused ? nullptr : monitorAt(pos);
+            const auto BAR     = MONITOR && pos.y > MONITOR->m_position.y + MONITOR->m_size.y - 200 && pointerOnDesktop() ? desktopSpacesBar(MONITOR) : std::nullopt;
+            const auto TILE    = BAR ? BAR->tileAt(pos) : std::nullopt;
+            const auto SPACE   = TILE ? BAR->tiles[*TILE].workspace.lock() : nullptr;
+            if (SPACE != m_hoverSpace.lock()) {
+                m_hoverSpace = SPACE;
+                damageDesktopMaps();
+            }
             return false;
+        }
 
         if (m_drag.kind != SDrag::DRAG_NONE) {
             dragMove(pos);
@@ -156,22 +191,44 @@ namespace Expanse {
         if (m_paused)
             return false;
 
+        stopCoasting();
+
         if (!live()) {
-            // At 100%, clicking a window that isn't fully on screen centres it.
-            // The click itself goes to the app; a drag (selecting, moving the
-            // window) doesn't count.
+            // At 100%, clicking a window that isn't fully on screen centres it,
+            // unless you were already in it. The click itself goes to the app;
+            // a drag (selecting, moving the window) doesn't count.
             if (button != BTN_LEFT)
                 return false;
 
             const auto POS = pointer();
-            if (pressed)
-                m_press = {POS, windowUnderPointer()};
-            else if (const auto WINDOW = m_press.window.lock(); WINDOW && POS.distance(m_press.pos) <= CLICK_SLOP && !fullyVisible(WINDOW))
+            if (pressed && pointerOnDesktop()) {
+                // The desktop, as on the Mac: a workspace's tile goes there;
+                // anywhere else zooms out.
+                const auto MONITOR = monitorAt(POS);
+                const auto BAR     = MONITOR ? desktopSpacesBar(MONITOR) : std::nullopt;
+                if (BAR && BAR->box.containsPoint(POS)) {
+                    if (const auto TILE = BAR->tileAt(POS))
+                        if (const auto WORKSPACE = BAR->tiles[*TILE].workspace.lock(); WORKSPACE && WORKSPACE != MONITOR->m_activeWorkspace)
+                            later([ref = PHLWORKSPACEREF{WORKSPACE}] {
+                                if (const auto TARGET = ref.lock(); TARGET && !TARGET->inert())
+                                    (void)Config::Actions::changeWorkspace(TARGET);
+                            });
+                    return true;
+                }
+                open(MONITOR);
+                return live();
+            }
+            if (pressed) {
+                const auto WINDOW = windowUnderPointer();
+                m_press           = {POS, WINDOW, WINDOW && WINDOW == m_inWindow.lock()};
+            } else if (const auto WINDOW = m_press.window.lock(); WINDOW && !m_press.wasFocused && POS.distance(m_press.pos) <= CLICK_SLOP && !fullyVisible(WINDOW))
                 glideLater(WINDOW, false);
             return false;
         }
 
         const auto POS = pointer();
+        if (pressed)
+            interruptDive();
 
         // On another monitor, the click is that monitor's, and this canvas
         // closes: it has the keyboard while it's up.
@@ -189,6 +246,7 @@ namespace Expanse {
             m_drag          = {};
             m_guides.clear();
             damage();
+            updateCursor();
             if (DRAG.kind == SDrag::DRAG_WINDOW && DRAG.moved) {
                 for (const auto& [ref, box] : DRAG.starts)
                     if (const auto WINDOW = ref.lock())
@@ -209,6 +267,7 @@ namespace Expanse {
 
         if (button == BTN_MIDDLE || (button == BTN_LEFT && m_spaceHeld)) {
             m_drag = {.kind = SDrag::DRAG_PAN, .start = POS, .last = POS};
+            updateCursor();
             return true;
         }
 
@@ -273,6 +332,28 @@ namespace Expanse {
     bool CCanvas::onAxis(const IPointer::SAxisEvent& event) {
         if (m_paused || (live() && !onCanvasMonitor(pointer())))
             return false;
+        // Fingers lifting (no distance) set a pan coasting, as on the Mac.
+        const bool FINGERS = event.source == WL_POINTER_AXIS_SOURCE_FINGER;
+        if (FINGERS && event.delta == 0) {
+            if (showsCanvas() && !(mods() & HL_MODIFIER_META)) {
+                const auto NOW = std::chrono::steady_clock::now();
+                std::erase_if(m_coast.recent, [&](const auto& sample) { return NOW - sample.first > COAST_WINDOW; });
+                Vector2D moved;
+                for (const auto& [at, delta] : m_coast.recent)
+                    moved = moved + delta;
+                const double SPAN = m_coast.recent.empty() ? 0 : std::chrono::duration<double>(NOW - m_coast.recent.front().first).count();
+                m_coast.recent.clear();
+                if (SPAN > 0.008 && (moved / SPAN).size() > COAST_MIN) {
+                    m_coast = {.velocity = moved / SPAN, .last = NOW, .active = true};
+                    wantFrame();
+                    damage();
+                }
+            }
+            return live();
+        }
+        // Scrolling again catches a coasting canvas (the gesture's own speed is kept).
+        m_coast.active = false;
+        interruptDive();
         if (m_state == STATE_GLIDING)
             return true;
 
@@ -294,15 +375,60 @@ namespace Expanse {
             return true;
         }
 
-        const double AMOUNT = -event.delta * (WHEEL ? WHEEL_PAN : 1.0);
-        pan(VERTICAL ? Vector2D{0.0, AMOUNT} : Vector2D{AMOUNT, 0.0});
+        const double   AMOUNT = -event.delta * (WHEEL ? WHEEL_PAN : 1.0);
+        const Vector2D DELTA  = VERTICAL ? Vector2D{0.0, AMOUNT} : Vector2D{AMOUNT, 0.0};
+        pan(DELTA);
+        if (FINGERS)
+            m_coast.recent.emplace_back(std::chrono::steady_clock::now(), DELTA);
         return true;
+    }
+
+    void CCanvas::coast() {
+        if (!m_coast.active)
+            return;
+        if (!showsCanvas()) {
+            stopCoasting();
+            return;
+        }
+        const auto   NOW     = std::chrono::steady_clock::now();
+        const double SECONDS = std::chrono::duration<double>(NOW - m_coast.last).count();
+        m_coast.last         = NOW;
+        m_coast.velocity     = m_coast.velocity * std::pow(COAST_DECAY, SECONDS * 1000.0);
+        if (m_coast.velocity.size() < COAST_MIN / 3) {
+            stopCoasting();
+            return;
+        }
+        // pan() would forget the way back, as for any pan; the camera moves here.
+        cameraMovedByUser();
+        setCamera({m_camera.origin - m_coast.velocity * SECONDS / m_camera.scale, m_camera.scale});
+    }
+
+    void CCanvas::stopCoasting() {
+        m_coast.active = false;
+        m_coast.recent.clear();
+    }
+
+    void CCanvas::updateCursor() {
+        // On the canvas, as on the Mac: an arrow, an open hand while Space is
+        // held, a closed one while panning. Elsewhere, the app's.
+        std::string shape;
+        if (showsCanvas())
+            shape = m_drag.kind == SDrag::DRAG_PAN ? "grabbing" : m_spaceHeld ? "grab" : "left_ptr";
+        if (shape == m_cursor)
+            return;
+        m_cursor = shape;
+        if (shape.empty())
+            Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_SPECIAL_ACTION);
+        else
+            Pointer::Cursor::overrideController->setOverride(shape, Pointer::Cursor::CURSOR_OVERRIDE_SPECIAL_ACTION);
     }
 
     bool CCanvas::onPinchBegin() {
         m_pinchScale = 1.0;
         if (m_paused || (live() && !onCanvasMonitor(pointer())))
             return false;
+        stopCoasting();
+        interruptDive();
 
         if (m_state == STATE_GLIDING)
             return true;
@@ -349,8 +475,10 @@ namespace Expanse {
 
     bool CCanvas::onKey(uint32_t keycode, bool pressed) {
         if (!pressed) {
-            if (keycode == KEY_SPACE)
+            if (keycode == KEY_SPACE) {
                 m_spaceHeld = false;
+                updateCursor();
+            }
             const auto IT = std::ranges::find(m_swallowedKeys, keycode);
             if (IT == m_swallowedKeys.end())
                 return false;
@@ -360,10 +488,16 @@ namespace Expanse {
 
         if (!live())
             return false;
+        // A glide from 100% leaves the keyboard with apps, as on the Mac:
+        // typing goes on into the window you're in.
+        if (m_state == STATE_GLIDING && !m_diving)
+            return false;
 
+        stopCoasting();
         const auto MODS = mods();
         if (m_state != STATE_GLIDING && handleCanvasKey(keycode, MODS)) {
             m_swallowedKeys.push_back(keycode);
+            updateCursor();
             return true;
         }
 
@@ -437,27 +571,43 @@ namespace Expanse {
 
     void CCanvas::onFocus(PHLWINDOW window, Desktop::eFocusReason reason) {
         // Keyboard focus (binds, Alt-Tab, a window closing) centres a window
-        // that isn't fully on screen. Clicks are handled on release; focus
-        // that follows the mouse never moves the canvas.
-        if (m_paused || live() || reason == Desktop::FOCUS_REASON_FFM || reason == Desktop::FOCUS_REASON_CLICK || std::chrono::steady_clock::now() < m_settledAt)
+        // that isn't fully on screen, once focus settles. Clicks are handled
+        // on release; focus that follows the mouse never moves the canvas.
+        if (reason != Desktop::FOCUS_REASON_FFM)
+            m_inWindow = window;
+        if (m_paused || live() || reason == Desktop::FOCUS_REASON_FFM || reason == Desktop::FOCUS_REASON_CLICK || std::chrono::steady_clock::now() < m_settledAt ||
+            !g_pCompositor || !g_pCompositor->m_wlEventLoop)
             return;
+        if (!m_focusTimer)
+            m_focusTimer = wl_event_loop_add_timer(
+                g_pCompositor->m_wlEventLoop,
+                [](void* data) {
+                    sc<CCanvas*>(data)->focusSettled();
+                    return 0;
+                },
+                this);
+        wl_event_source_timer_update(m_focusTimer, FOCUS_SETTLE_MS);
+    }
 
-        if (!offItsScreen(window))
+    void CCanvas::focusSettled() {
+        const auto WINDOW = Desktop::focusState()->window();
+        if (m_paused || live() || !WINDOW || std::chrono::steady_clock::now() < m_settledAt || !offItsScreen(WINDOW))
             return;
         if (m_autoCentre) {
-            glideLater(window, true);
+            glideTo(WINDOW, true);
             return;
         }
         // Auto-centre off means the canvas stays put, even for a window
-        // entirely off screen; say where it went instead (once).
+        // all but off screen; say where it went instead (once).
         bool GONE = false;
         {
-            SOnMonitor here{*this, window->m_monitor.lock()};
-            GONE = screenBox(window).intersection(usableArea()).empty();
+            SOnMonitor here{*this, WINDOW->m_monitor.lock()};
+            const CBox SHOWING = screenBox(WINDOW).intersection(usableArea());
+            GONE               = SHOWING.w < PARKED_SHOWING || SHOWING.h < PARKED_SHOWING;
         }
-        if (GONE && m_offscreenHint.lock() != window) {
-            m_offscreenHint = window;
-            HyprlandAPI::addNotification(PHANDLE, std::format("{} is off-screen · Alt+` to find it", appName(window)), CHyprColor{0.54F, 0.71F, 0.98F, 1.F}, 3000);
+        if (GONE && m_offscreenHint.lock() != WINDOW) {
+            m_offscreenHint = WINDOW;
+            Toast::show(std::format("{} is off-screen · Alt+` to find it", appName(WINDOW)));
         }
     }
 }

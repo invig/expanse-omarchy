@@ -68,9 +68,15 @@ namespace Expanse {
     }
 
     std::optional<SSpacesBar> CCanvas::spacesBar() const {
-        const auto MONITOR = monitor();
-        const auto MAP     = minimap();
-        if (!MONITOR || !MAP)
+        const auto MAP = minimap();
+        return MAP ? spacesBarBeside(monitor(), workspace(), *MAP) : std::nullopt;
+    }
+
+    std::optional<SSpacesBar> CCanvas::spacesBarBeside(const PHLMONITOR& on, const PHLWORKSPACE& current, const SMinimap& map) const {
+        const auto& MONITOR = on;
+        const auto& CURRENT = current;
+        const auto* MAP     = &map;
+        if (!MONITOR)
             return std::nullopt;
 
         std::vector<PHLWORKSPACE> workspaces;
@@ -99,7 +105,6 @@ namespace Expanse {
         bar.box.y = MAP->box.y;
 
         const auto HOVER   = m_hoverSpace.lock();
-        const auto CURRENT = workspace();
         const CBox SCREEN  = {MONITOR->m_position, MONITOR->m_size};
         for (size_t i = 0; i < workspaces.size(); ++i) {
             const auto& workspace = workspaces[i];

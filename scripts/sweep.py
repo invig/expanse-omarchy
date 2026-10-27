@@ -617,6 +617,77 @@ wait(2)
 check("with auto-centre off it leaves the canvas where it is", real() == before and active() == D)
 ctl("autocentre on")
 
+# ===== As on the Mac, since 0.1.13. Clicking the empty desktop at 100% zooms out (0.1.14).
+point(OX + MW / 2, OY + MH / 2)
+settle()
+r = real()
+desk = next(((x, y) for x in range(int(OX) + 60, int(OX + MW) - 320, 40) for y in range(int(OY) + 80, int(OY + MH) - 240, 40)
+             if not any(inside((x, y), b, 24) for b in r.values())), None)
+if desk:
+    point(*desk)
+    qmp("click", "sleep", 600)
+    check("clicking the empty desktop at 100% zooms out", ctl()["state"] in ("opening", "overview"), ctl()["state"])
+    qmp("key", "esc")
+    settle()
+else:
+    print("SKIP  clicking the empty desktop (no empty spot)")
+
+# The minimap is on the desktop at 100% too, under the windows.
+mm = (OX + MW - 16 - 208, OY + MH - 16 - 136, 208, 136)
+if not any(overlap(mm, b) for b in real().values()):
+    p = pixel(mm[0] + 40, mm[1] + 4)
+    check("at 100% the minimap is on the desktop, under the windows", len(p) >= 6 and all(int(p[i:i + 2], 16) < 0x50 for i in (0, 2, 4)), p)
+else:
+    print("SKIP  the minimap at 100% (a window covers it)")
+
+# With auto-centre off, a hop to a window already on screen focuses it where it is.
+ctl(f"focus {A}")
+settle()
+r = real()
+move_by(B, r[A][0] + r[A][2] + 60 - r[B][0], r[A][1] - r[B][1])
+ctl("autocentre off")
+focus(A)
+wait(1)
+before = real()
+qmp("key", "meta_l+right")
+wait(1.5)
+b = before[B]
+shown = OX <= b[0] and b[0] + b[2] <= OX + MW and OY <= b[1] and b[1] + b[3] <= OY + MH
+check("auto-centre off: a hop to a window on screen focuses it where it is", shown and active() == B and real() == before, f"{active()} on screen {shown}")
+ctl("autocentre on")
+
+# A scroll while diving into a window stops the dive, still on the canvas.
+zoom_out()
+point(*centre(mine()[A]["screen"]))
+qmp("click", "sleep", 40, "wheel", "down", 2, "sleep", 500)
+check("a scroll while diving into a window stops it, on the canvas", ctl()["state"] == "overview", ctl()["state"])
+qmp("key", "esc")
+settle()
+
+# Typing as a click glides a window into view goes on into it: a glide from
+# 100% leaves the keyboard with apps.
+T = f"sweep-t-{RUN}"
+vm("rm -f /tmp/sweep-typed; printf '#!/bin/sh\\ncat > /tmp/sweep-typed\\n' > /tmp/sweep-type.sh; chmod +x /tmp/sweep-type.sh")
+vm(f'hyprctl dispatch "hl.dsp.exec_cmd(\\"foot --app-id={T} /tmp/sweep-type.sh\\", {{ float = true, size = \\"600 400\\" }})"')
+wait(2.2)
+settle()
+if T in real():
+    r = real()
+    move_by(T, OX + MW - 200 - r[T][0], 0)
+    focus(A)
+    settle()
+    point(OX + MW - 100, centre(real()[T])[1])
+    wait(0.8)
+    qmp("click", "sleep", 30, "key", "h", "key", "i", "key", "ret")
+    settle()
+    wait(0.5)
+    typed = vm("cat /tmp/sweep-typed").strip()
+    check("typing as a click glides a window into view goes into it", typed == "hi" and centred(real()[T]), f"typed {typed!r}, {real()[T]}")
+    vm(f"kill {client(T)['pid']}")
+    wait(1)
+else:
+    print("SKIP  typing during a glide (its window didn't open)")
+
 # The plain background.
 zoom_out()
 spot = empty_spot(ctl())
@@ -985,9 +1056,12 @@ APPS += [X1, X3, H1, H2, BIG]
 ASKPASS = os.environ.get("VM_ASKPASS")
 
 
-def touchpad(start, end, seconds=0.6):
+def touchpad(*gesture):
     sudo = f"SUDO_ASKPASS={ASKPASS} sudo -A" if ASKPASS else "sudo -n"
-    return subprocess.run(SSH + [f"{sudo} python3 -I /home/test/expanse-hypr/scripts/touchpad.py pinch {start} {end} {seconds}"], capture_output=True).returncode == 0
+    if len(gesture) == 2:
+        gesture += (0.6,)
+    words = gesture if isinstance(gesture[0], str) else ("pinch",) + gesture
+    return subprocess.run(SSH + [f"{sudo} python3 -I /home/test/expanse-hypr/scripts/touchpad.py {' '.join(map(str, words))}"], capture_output=True).returncode == 0
 
 
 state = ctl()
@@ -1009,6 +1083,12 @@ if touchpad(0.5, 0.25):
     touchpad(0.5, 0.3)
     qmp("let", "alt", "sleep", 600)
     check("touchpad: Alt + pinching in over a window zooms out", ctl()["state"] == "overview")
+    # A two-finger pan coasts on after the fingers lift, as on the Mac.
+    point(*empty_spot(ctl()))
+    touchpad("scroll", 0.4, 0.25)
+    coasting = ctl()["origin"]
+    wait(0.3)
+    check("touchpad: a two-finger pan coasts on after the fingers lift", ctl()["origin"] != coasting, f"{coasting} -> {ctl()['origin']}")
     qmp("key", "esc")
     settle()
 else:

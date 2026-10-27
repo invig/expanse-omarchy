@@ -2,11 +2,14 @@
 """A virtual touchpad, to pinch through the kernel and libinput as a real one does.
 
     sudo scripts/touchpad.py pinch FROM TO [SECONDS]
+    sudo scripts/touchpad.py scroll DY [SECONDS]
 
 Creates a two-finger touchpad with uinput (no dependencies; needs root for
-/dev/uinput), waits for the compositor to pick it up, then moves two fingers
-from FROM to TO apart (as fractions of the pad's width; less is pinching in)
-over SECONDS, and lifts them. libinput turns that into a pinch gesture.
+/dev/uinput), waits for the compositor to pick it up, then either moves two
+fingers from FROM to TO apart (as fractions of the pad's width; less is
+pinching in), or both together DY down the pad (a fraction of its height;
+negative is up), over SECONDS, and lifts them. libinput turns that into a
+pinch gesture, or a two-finger scroll that stops as the fingers lift.
 """
 
 import fcntl
@@ -94,16 +97,33 @@ def pinch(fd, start, end, seconds):
               (EV_KEY, BTN_TOUCH, 0), (EV_KEY, BTN_TOOL_DOUBLETAP, 0)])
 
 
+def scroll(fd, dy, seconds):
+    # Two fingers a pad's fifth apart, moving down together, lifting at speed.
+    (ax, _), (bx, _) = fingers(0.2)
+    start = HEIGHT // 2 - int(dy * HEIGHT / 2)
+    emit(fd, [(EV_ABS, ABS_MT_SLOT, 0), (EV_ABS, ABS_MT_TRACKING_ID, 1), (EV_ABS, ABS_MT_POSITION_X, ax), (EV_ABS, ABS_MT_POSITION_Y, start),
+              (EV_ABS, ABS_MT_SLOT, 1), (EV_ABS, ABS_MT_TRACKING_ID, 2), (EV_ABS, ABS_MT_POSITION_X, bx), (EV_ABS, ABS_MT_POSITION_Y, start),
+              (EV_KEY, BTN_TOUCH, 1), (EV_KEY, BTN_TOOL_DOUBLETAP, 1), (EV_ABS, ABS_X, ax), (EV_ABS, ABS_Y, start)])
+    steps = max(int(seconds / 0.012), 2)
+    for i in range(1, steps + 1):
+        time.sleep(seconds / steps)
+        y = start + int(dy * HEIGHT * i / steps)
+        emit(fd, [(EV_ABS, ABS_MT_SLOT, 0), (EV_ABS, ABS_MT_POSITION_Y, y), (EV_ABS, ABS_MT_SLOT, 1), (EV_ABS, ABS_MT_POSITION_Y, y), (EV_ABS, ABS_Y, y)])
+    emit(fd, [(EV_ABS, ABS_MT_SLOT, 0), (EV_ABS, ABS_MT_TRACKING_ID, -1), (EV_ABS, ABS_MT_SLOT, 1), (EV_ABS, ABS_MT_TRACKING_ID, -1),
+              (EV_KEY, BTN_TOUCH, 0), (EV_KEY, BTN_TOOL_DOUBLETAP, 0)])
+
+
 def main():
-    if len(sys.argv) < 4 or sys.argv[1] != "pinch":
+    if len(sys.argv) < 3 or sys.argv[1] not in ("pinch", "scroll") or (sys.argv[1] == "pinch" and len(sys.argv) < 4):
         raise SystemExit(__doc__)
-    start, end = float(sys.argv[2]), float(sys.argv[3])
-    seconds = float(sys.argv[4]) if len(sys.argv) > 4 else 0.6
     fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
     try:
         create(fd)
         time.sleep(1.5)  # for udev, libinput and the compositor to add it
-        pinch(fd, start, end, seconds)
+        if sys.argv[1] == "pinch":
+            pinch(fd, float(sys.argv[2]), float(sys.argv[3]), float(sys.argv[4]) if len(sys.argv) > 4 else 0.6)
+        else:
+            scroll(fd, float(sys.argv[2]), float(sys.argv[3]) if len(sys.argv) > 3 else 0.3)
         time.sleep(0.5)
     finally:
         fcntl.ioctl(fd, UI_DEV_DESTROY)

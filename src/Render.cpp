@@ -2,8 +2,11 @@
 
 #include "Render.hpp"
 #include "Canvas.hpp"
+#include "Perf.hpp"
+#include "Toast.hpp"
 
 #include <hyprland/src/desktop/Workspace.hpp>
+#include <hyprland/src/desktop/state/FadingOutState.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
 #include <hyprland/src/desktop/view/LayerSurface.hpp>
 #include <hyprland/src/desktop/view/WLSurface.hpp>
@@ -21,8 +24,10 @@
 #include <hyprland/src/render/pass/RectPassElement.hpp>
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 
+#include <algorithm>
 #include <format>
 #include <cmath>
+#include <functional>
 #include <unordered_map>
 
 // Hyprland's function hooks only work on x86_64, so the canvas draws from
@@ -65,10 +70,16 @@ namespace Expanse::Render {
         friend type robbed(SInputBlockTag);
     };
 
+    struct SFadeoutsTag {
+        using type = std::vector<SP<Desktop::IFadeout>> Desktop::CFadingOutState::*;
+        friend type robbed(SFadeoutsTag);
+    };
+
     template struct SRob<SRenderWindowTag, &::Render::IHyprRenderer::renderWindow>;
     template struct SRob<SInputBlockTag, &Desktop::View::CWindow::m_inputBlockReasons>;
     template struct SRob<SHiddenTag, &Desktop::View::CWindow::m_hidden>;
     template struct SRob<SBeingAnimatedTag, &Hyprutils::Animation::CBaseAnimatedVariable::m_bIsBeingAnimated>;
+    template struct SRob<SFadeoutsTag, &Desktop::CFadingOutState::m_fadeouts>;
 
     // Without decorations (their boxes are laid out for the window's real
     // size) or popups (theirs aren't moved with it). As on the Mac, where a
@@ -89,8 +100,10 @@ namespace Expanse::Render {
     static const CHyprColor LABEL        = {1.F, 1.F, 1.F, 0.95F};
     static const CHyprColor LABEL_SHADOW = {0.F, 0.F, 0.F, 0.7F};
     static const CHyprColor LABEL_QUIET  = {0.75F, 0.75F, 0.75F, 0.9F};
-    static const CHyprColor PLAIN_BACKGROUND = {0.13F, 0.13F, 0.13F, 1.F}; // the canvas without the desktop picture
-    constexpr float         DIM_ALPHA    = 0.45F;
+    static const CHyprColor LABEL_LIGHT  = {0.32F, 0.32F, 0.32F, 1.F};
+    // The canvas without the desktop picture, in the theme's light or dark.
+    static const CHyprColor PLAIN_DARK   = {0.13F, 0.13F, 0.13F, 1.F};
+    static const CHyprColor PLAIN_LIGHT  = {0.85F, 0.85F, 0.85F, 1.F};
     // Expanse's shadow is black at 22%, 14 pt of blur, 6 pt down. Hyprland's
     // shader fades out over its whole range, so it reaches twice the blur
     // radius and starts darker, to look the same.
@@ -100,6 +113,10 @@ namespace Expanse::Render {
     constexpr double        LABEL_PT     = 11.0;
     constexpr double        LABEL_GAP    = 5.0;
     constexpr double        LABEL_MIN    = 70.0; // narrower on screen, a window shows no label
+    // Making text costs as much as drawing everything else in a frame, so
+    // while the camera moves a label keeps the text it has (cropped to its
+    // window), and only a few missing ones are made each frame.
+    constexpr int           LABELS_PER_FRAME = 4;
 
     struct SRestore {
         PHLWINDOWREF window;
@@ -117,6 +134,7 @@ namespace Expanse::Render {
         Time::steady_tp        now;
     };
     static SFrame g_frame;
+    static PHLMONITORREF g_rendering; // the monitor this frame is for: Hyprland forgets it before RENDER_POST
 
     // Text is drawn once and kept until it changes.
     struct SText {
@@ -128,6 +146,7 @@ namespace Expanse::Render {
     };
     static std::unordered_map<const Desktop::View::CWindow*, SText> g_labels;
     static SText                                                     g_closeGlyph;
+    static int                                                       g_labelsMade = 0; // this frame
 
     static CBox toPixels(const CBox& screen, const PHLMONITOR& monitor) {
         return screen.copy().translate(-monitor->m_position).scale(monitor->m_scale).round();
@@ -245,22 +264,29 @@ namespace Expanse::Render {
         add(makeUnique<CBorderPassElement>(border));
     }
 
-    static void addTexture(const SP<::Render::ITexture>& tex, const Vector2D& px) {
+    static void addTexture(const SP<::Render::ITexture>& tex, const Vector2D& px, const CBox& clip = {}) {
         if (!tex || !drawable({px, tex->m_size}))
             return;
         CTexPassElement::SRenderData data;
-        data.tex = tex;
-        data.box = {px, tex->m_size};
+        data.tex     = tex;
+        data.box     = {px, tex->m_size};
+        data.clipBox = clip;
         add(makeUnique<CTexPassElement>(std::move(data)));
     }
 
     static bool refresh(SText& cached, const std::string& text, int px, int width, const CHyprColor& color, bool shadow) {
         if (cached.tex && cached.text == text && cached.px == px && cached.width == width)
             return true;
+        Perf::textRendered();
         cached = {text, width, px, g_pHyprRenderer->renderText(text, color, px, false, "", width, 500), nullptr};
         if (shadow)
             cached.shadow = g_pHyprRenderer->renderText(text, LABEL_SHADOW, px, false, "", width, 500);
         return cached.tex != nullptr;
+    }
+
+    static CHyprColor labelColor(bool plain) {
+        // White with a shadow over the desktop picture; quiet grey over the plain background.
+        return !plain ? LABEL : g_canvas.lightTheme() ? LABEL_LIGHT : LABEL_QUIET;
     }
 
     static void addLabel(const PHLMONITOR& monitor, const PHLWINDOW& window, const CBox& screen, bool hovered, bool plain) {
@@ -268,19 +294,39 @@ namespace Expanse::Render {
             return;
         const std::string NAME = appName(window);
         const std::string TEXT = hovered && !window->m_title.empty() && window->m_title != NAME ? NAME + " — " + window->m_title : NAME;
-        // Text is redrawn when its width changes, so while zooming it changes in 32 px steps.
+        // Text is made again when its width changes, so while zooming it changes in 32 px steps.
         const int WIDTH = std::max(sc<int>(std::floor(std::max((screen.w - 4) * monitor->m_scale, 60.0) / 32.0)) * 32, 60);
         const int PX    = std::round(LABEL_PT * monitor->m_scale);
 
-        // White with a shadow over the desktop picture; quiet grey over the plain background.
-        auto& cached = g_labels[window.get()];
-        if (!refresh(cached, TEXT, PX, WIDTH, plain ? LABEL_QUIET : LABEL, !plain))
+        auto&      cached  = g_labels[window.get()];
+        const bool CURRENT = cached.tex && cached.text == TEXT && cached.px == PX && cached.width == WIDTH;
+        const bool KEEP    = cached.tex && cached.text == TEXT && cached.px == PX && g_canvas.cameraMoving();
+        if (!CURRENT && !KEEP) {
+            if (g_labelsMade >= LABELS_PER_FRAME)
+                g_canvas.wantFrame(); // the rest next frame
+            else {
+                ++g_labelsMade;
+                refresh(cached, TEXT, PX, WIDTH, labelColor(plain), !plain);
+            }
+        }
+        if (!cached.tex)
             return;
+
+        // As on the Mac, just above the window, cropped to its width.
         const CBox     PIXELS = toPixels(screen, monitor);
-        const Vector2D AT     = {PIXELS.x + 2 * monitor->m_scale, PIXELS.y + PIXELS.h + LABEL_GAP * monitor->m_scale};
+        const double   S      = monitor->m_scale;
+        const Vector2D AT     = Vector2D{PIXELS.x + 2 * S, PIXELS.y - LABEL_GAP * S - cached.tex->m_size.y}.round();
+        const CBox     CLIP   = {AT.x, AT.y - S, std::max(PIXELS.w - 4 * S, 1.0), cached.tex->m_size.y + 3 * S};
         if (cached.shadow)
-            addTexture(cached.shadow, AT + Vector2D{0.0, sc<double>(monitor->m_scale)});
-        addTexture(cached.tex, AT);
+            addTexture(cached.shadow, AT + Vector2D{0.0, S}, CLIP);
+        addTexture(cached.tex, AT, CLIP);
+    }
+
+    // Labels of windows that have gone.
+    static void pruneLabels() {
+        std::erase_if(g_labels, [](const auto& entry) {
+            return std::ranges::none_of(Desktop::windowState()->windows(), [&](const PHLWINDOW& window) { return window.get() == entry.first; });
+        });
     }
 
     static void addCloseButton(const PHLMONITOR& monitor, const CBox& screen) {
@@ -301,7 +347,17 @@ namespace Expanse::Render {
                 GUIDE);
     }
 
-    static SText g_zoomText;
+    // The zoom under the minimap: each value is made once and kept.
+    static std::unordered_map<int, SP<::Render::ITexture>> g_zoomTexts;
+
+    static SP<::Render::ITexture> zoomText(int percent, int px) {
+        auto& tex = g_zoomTexts[percent * 1000 + px];
+        if (!tex) {
+            Perf::textRendered();
+            tex = g_pHyprRenderer->renderText(std::format("{}%", percent), CHyprColor{1.F, 1.F, 1.F, 0.7F}, px, false, "", 0, 500);
+        }
+        return tex;
+    }
 
     // As on the Mac: a dark panel, windows as light blocks, the view outlined,
     // the zoom underneath.
@@ -318,8 +374,8 @@ namespace Expanse::Render {
         addRect(VIEW, CHyprColor{1.F, 1.F, 1.F, 0.06F}, std::round(2 * S));
         addOutline(monitor, VIEW, CHyprColor{1.F, 1.F, 1.F, 0.9F}, 1, std::round(2 * S));
 
-        if (refresh(g_zoomText, std::format("{}%", sc<int>(std::round(scale * 100))), std::round(10 * S), 0, CHyprColor{1.F, 1.F, 1.F, 0.7F}, false))
-            addTexture(g_zoomText.tex, Vector2D{BOX.x + 10 * S, BOX.y + BOX.h - 7 * S - g_zoomText.tex->m_size.y}.round());
+        if (const auto TEXT = zoomText(sc<int>(std::round(scale * 100)), std::round(10 * S)))
+            addTexture(TEXT, Vector2D{BOX.x + 10 * S, BOX.y + BOX.h - 7 * S - TEXT->m_size.y}.round());
     }
 
     static SText              g_spacesHeading;
@@ -378,6 +434,58 @@ namespace Expanse::Render {
         }
     }
 
+    // At 100%, as on the Mac, the minimap and workspaces bar are on the
+    // desktop, under the windows. Hyprland only redraws what changed, so when
+    // what they show changes, so does their spot on screen.
+    static std::unordered_map<std::string, size_t> g_desktopMaps; // per monitor, what was last drawn
+
+    static size_t mapsHash(const std::optional<SMinimap>& map, const std::optional<SSpacesBar>& bar) {
+        size_t     hash = 0;
+        const auto MIX  = [&](double value) { hash = hash * 1000003 ^ std::hash<long long>{}(std::llround(value * 4)); };
+        const auto BOX  = [&](const CBox& box) {
+            MIX(box.x);
+            MIX(box.y);
+            MIX(box.w);
+            MIX(box.h);
+        };
+        if (map) {
+            BOX(map->box);
+            BOX(map->viewport);
+            for (const auto& window : map->windows)
+                BOX(window);
+        }
+        if (bar)
+            for (const auto& tile : bar->tiles) {
+                BOX(tile.box);
+                MIX(tile.current * 2 + tile.hovered);
+                for (const auto& window : tile.windows)
+                    BOX(window);
+            }
+        return hash;
+    }
+
+    void beforeFrame(const PHLMONITOR& monitor) {
+        const auto MAP  = g_canvas.desktopMinimap(monitor);
+        const auto BAR  = MAP ? g_canvas.desktopSpacesBar(monitor) : std::nullopt;
+        const auto HASH = mapsHash(MAP, BAR);
+        auto&      last = g_desktopMaps[monitor->m_name];
+        if (last == HASH)
+            return;
+        last = HASH;
+        // The panels sit in the bottom-right corner, the bar however wide it is.
+        const CBox AREA = {monitor->m_position.x, monitor->m_position.y + monitor->m_size.y - 220, monitor->m_size.x, 220};
+        g_pHyprRenderer->damageBox(AREA);
+    }
+
+    static void drawDesktopMaps(const PHLMONITOR& monitor) {
+        const auto MAP = g_canvas.desktopMinimap(monitor);
+        if (!MAP)
+            return;
+        addMinimap(monitor, *MAP, 1.0);
+        if (const auto BAR = g_canvas.desktopSpacesBar(monitor))
+            addSpacesBar(monitor, *BAR, false);
+    }
+
     // Other monitors. A canvas reaches past its monitor's edges, over its
     // neighbours': a window there is on another canvas, off its screen. It
     // isn't drawn on the neighbour, and while the pointer is there it takes
@@ -431,9 +539,23 @@ namespace Expanse::Render {
         }
     }
 
+    // A window closed on the canvas just goes, as its picture does on the
+    // Mac: Hyprland would fade it out at its real size and spot.
+    static void dropCanvasFadeouts() {
+        const auto WORKSPACE = g_canvas.workspace();
+        auto&      fadeouts  = Desktop::fadingOutState().get()->*robbed(SFadeoutsTag{});
+        std::erase_if(fadeouts, [&](const SP<Desktop::IFadeout>& fadeout) {
+            const auto PLANE = fadeout ? fadeout->plane() : Desktop::FADEOUT_PLANE_POPUP;
+            return fadeout && fadeout->workspace().lock() == WORKSPACE &&
+                (PLANE == Desktop::FADEOUT_PLANE_WINDOW_TILED || PLANE == Desktop::FADEOUT_PLANE_WINDOW_FLOATING || PLANE == Desktop::FADEOUT_PLANE_WINDOW_OVER_FULLSCREEN);
+        });
+    }
+
     static void hideCanvasWindows(PHLMONITOR monitor) {
         if (!g_canvas.drawsOn(monitor) || monitor->m_activeWorkspace != g_canvas.workspace())
             return;
+        if (!Desktop::fadingOutState()->fadeouts().empty())
+            dropCanvasFadeouts();
 
         g_frame.monitor = monitor;
         g_frame.hidden  = g_canvas.canvasWindows();
@@ -493,13 +615,19 @@ namespace Expanse::Render {
             g_labels.clear();
             plainLabels = PLAIN;
         }
+        // As on the Mac, the desktop picture as it is; or the plain background.
         const float SHOWN = sc<float>(g_canvas.zoomedOut());
-        if (SHOWN > 0.F)
-            addRect({0, 0, MONITOR->m_transformedSize.x, MONITOR->m_transformedSize.y}, PLAIN ? PLAIN_BACKGROUND.modifyA(SHOWN) : CHyprColor{0.F, 0.F, 0.F, DIM_ALPHA * SHOWN});
+        if (SHOWN > 0.F && PLAIN)
+            addRect({0, 0, MONITOR->m_transformedSize.x, MONITOR->m_transformedSize.y}, (g_canvas.lightTheme() ? PLAIN_LIGHT : PLAIN_DARK).modifyA(SHOWN));
 
+        // Only what's on this monitor (shadows reach past their windows).
+        const CBox SCREEN = CBox{MONITOR->m_position, MONITOR->m_size}.expand((SHADOW_RADIUS + SHADOW_OFFSET) * g_canvas.scale() + 1);
+        g_labelsMade      = 0;
         for (size_t i = 0; i < WINDOWS.size(); ++i) {
             const auto& window = WINDOWS[i];
-            auto&       size   = window->sizeAnimation();
+            if (screens[i].intersection(SCREEN).empty())
+                continue;
+            auto& size = window->sizeAnimation();
 
             g_frame.restore.push_back({window, window->positionAnimation()->value(), size->value(), window->m_animatingIn, size->isBeingAnimated()});
 
@@ -548,13 +676,27 @@ namespace Expanse::Render {
             addSpacesBar(MONITOR, *SPACESBAR, PLAIN);
     }
 
+    static void stageWork(eRenderStage stage);
+
     void onStage(eRenderStage stage) {
+        stageWork(stage);
+        if (stage == RENDER_POST)
+            Perf::frameEnd();
+    }
+
+    static void stageWork(eRenderStage stage) {
+        Perf::CPluginTime timed;
         switch (stage) {
             case RENDER_BEGIN:
-                if (const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor.lock()) {
+                g_rendering = g_pHyprRenderer->m_renderData.pMonitor;
+                if (const auto MONITOR = g_rendering.lock()) {
                     hideForeignWindows(MONITOR);
                     hideCanvasWindows(MONITOR);
                 }
+                break;
+            case RENDER_PRE_WINDOWS:
+                if (const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor.lock())
+                    drawDesktopMaps(MONITOR);
                 break;
             // Below the bar and other top layers, above the wallpaper.
             case RENDER_POST_WINDOWS: drawCanvas(); break;
@@ -563,15 +705,29 @@ namespace Expanse::Render {
             case RENDER_LAST_MOMENT:
                 unhideCanvasWindows();
                 unhideForeignWindows();
+                if (const auto MONITOR = g_rendering.lock()) {
+                    Toast::draw(MONITOR);
+                    // While something moves, the next frame. Asked for now,
+                    // while this one draws, Hyprland keeps the request and
+                    // schedules it once this frame is out; from render.pre,
+                    // before the frame starts, it's dropped.
+                    if (g_canvas.takeFrameRequest(MONITOR))
+                        g_pHyprRenderer->damageMonitor(MONITOR);
+                    Toast::afterFrame(MONITOR);
+                }
                 break;
             // The pass has drawn; the windows get their real geometry back.
-            case RENDER_POST:
+            case RENDER_POST: {
                 unhideCanvasWindows();
                 unhideForeignWindows();
                 restoreGeometry();
-                if (!g_canvas.live())
-                    g_labels.clear();
+                g_rendering.reset();
+                static bool wasLive = false;
+                if (wasLive && !g_canvas.live())
+                    pruneLabels();
+                wasLive = g_canvas.live();
                 break;
+            }
             default: break;
         }
     }
@@ -588,7 +744,9 @@ namespace Expanse::Render {
         restoreGeometry();
         g_labels.clear();
         g_closeGlyph = {};
-        g_zoomText   = {};
+        g_zoomTexts.clear();
+        g_desktopMaps.clear();
+        Toast::shutdown();
         g_spacesHeading = {};
         g_spaceNames.clear();
     }

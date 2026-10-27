@@ -84,7 +84,7 @@ namespace Expanse {
 
         // Modes
         void                   toggle();
-        void                   open();         // zoomed out to every window
+        void                   open(PHLMONITOR monitor = nullptr); // zoomed out to every window (on the focused monitor)
         void                   openAt100();    // the canvas at 100%, to move around from here
         void                   close();        // back where you were, or where you've moved to
         void                   glideTo(PHLWINDOW window, bool fromKeyboard = false);
@@ -139,6 +139,8 @@ namespace Expanse {
         // What's drawn
         bool                   live() const;
         bool                   showsCanvas() const; // the canvas is up, not gliding
+        bool                   decorated() const;   // labels, rings, minimap: up, or diving from it into a window
+        bool                   lightTheme() const;  // the theme's light, for the plain background
         bool                   isCanvasWindow(PHLWINDOW window) const;
         bool                   drawsOn(PHLMONITOR monitor) const;
         PHLWINDOW              hovered() const;
@@ -152,6 +154,17 @@ namespace Expanse {
         const std::vector<Arrange::SGuide>& guides() const; // canvas
         std::optional<SMinimap> minimap() const;              // while the canvas is up
         std::optional<SSpacesBar> spacesBar() const;          // while the canvas is up
+        // As on the Mac, the minimap and workspaces bar are on the desktop at
+        // 100% too, under the windows: a monitor's, for its workspace.
+        std::optional<SMinimap>   desktopMinimap(const PHLMONITOR& monitor) const;
+        std::optional<SSpacesBar> desktopSpacesBar(const PHLMONITOR& monitor) const;
+        void                      damageDesktopMaps() const; // they show windows that changed
+
+        // Frames. Hyprland draws when something has changed; while the camera
+        // moves, each frame asks for the next as it's drawn (Render.cpp).
+        bool                   cameraMoving() const; // moving, or moved a moment ago: text waits
+        void                   wantFrame();          // one more, for this canvas's monitor
+        bool                   takeFrameRequest(const PHLMONITOR& monitor);
 
         std::vector<PHLWINDOW> canvasWindows() const; // bottom to top
         CBox                   screenBox(PHLWINDOW window) const; // global logical, through the camera
@@ -191,6 +204,12 @@ namespace Expanse {
         CBox                   viewCentre() const;
         bool                   fullyVisible(PHLWINDOW window) const;
         PHLWINDOW              nearest(eDirection direction, const CBox& from, PHLWINDOW exclude) const;
+        std::optional<SSpacesBar> spacesBarBeside(const PHLMONITOR& monitor, const PHLWORKSPACE& current, const SMinimap& map) const;
+        bool                   interruptDive(); // input during a dive leaves you on the canvas, as on the Mac
+        void                   focusSettled();   // keyboard focus, once it stops moving
+        void                   coast();          // a pan's momentum, one frame on
+        void                   stopCoasting();
+        void                   updateCursor();
         void                   glideLater(PHLWINDOW window, bool fromKeyboard);
         void                   animateTo(const SCamera& to, eState state, double seconds);
         void                   advance(bool late); // the camera, one frame on (or to the end, late)
@@ -245,6 +264,10 @@ namespace Expanse {
 
         eState                 m_state        = STATE_IDLE;
         bool                   m_animating    = false;
+        bool                   m_diving       = false; // gliding from the canvas: it stays drawn until the dive lands
+        bool                   m_frameWanted  = false;
+        bool                   m_light        = false;
+        std::chrono::steady_clock::time_point m_cameraChangedAt;
         bool                   m_fromKeyboard = false; // the glide lands like Hyprland's movefocus
         bool                   m_autoCentre   = true;
         std::optional<bool>    m_wallpaper;
@@ -253,6 +276,13 @@ namespace Expanse {
         SCamera                m_to;
         std::chrono::steady_clock::time_point m_animStart;
         double                 m_animSeconds = 0.0;
+        // As the Mac logs them: when the first frame came, how many, the longest gap.
+        struct {
+            int                                   frames = 0;
+            std::chrono::steady_clock::time_point first, last;
+            double                                maxGap = 0.0;
+        } m_animFrames;
+        std::string            m_lastAnimation = "-";
 
         // The 100% view you left when zooming out; leaving the canvas returns
         // there unless you've panned or zoomed since.
@@ -349,7 +379,23 @@ namespace Expanse {
         struct {
             Vector2D     pos;
             PHLWINDOWREF window;
+            bool         wasFocused = false; // you were already in it: it stays where you left it
         } m_press;
+        PHLWINDOWREF           m_inWindow; // focused by a click or the keyboard, not by the pointer passing over
+
+        // Focus often bounces between windows for a moment (an app opening a
+        // document, a window closing): keyboard focus is acted on once it settles.
+        wl_event_source*       m_focusTimer = nullptr;
+
+        // A two-finger pan coasts on after the fingers lift, as on the Mac.
+        struct {
+            std::vector<std::pair<std::chrono::steady_clock::time_point, Vector2D>> recent;
+            Vector2D                              velocity; // px a second
+            std::chrono::steady_clock::time_point last;
+            bool                                  active = false;
+        } m_coast;
+
+        std::string            m_cursor; // the shape the canvas set, if any
 
         bool                   m_spaceHeld  = false;
         bool                   m_pinching   = false;

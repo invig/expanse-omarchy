@@ -22,7 +22,9 @@
 #include "Canvas.hpp"
 #include "HotCorner.hpp"
 #include "Later.hpp"
+#include "Perf.hpp"
 #include "Render.hpp"
+#include "Toast.hpp"
 #include "globals.hpp"
 
 using namespace Expanse;
@@ -55,8 +57,7 @@ static int luaTidy(lua_State* L) {
 static int luaAutoCentre(lua_State* L) {
     return luaPush(L, [](lua_State*) {
         g_canvas.setAutoCentre(!g_canvas.autoCentre());
-        HyprlandAPI::addNotification(PHANDLE, g_canvas.autoCentre() ? "Auto-centre on" : "Auto-centre off: clicking a window partly on screen leaves the canvas where it is",
-                                     CHyprColor{0.54F, 0.71F, 0.98F, 1.F}, 2500);
+        Toast::show(g_canvas.autoCentre() ? "Auto-centre on" : "Auto-centre off: windows stay put");
         return 0;
     });
 }
@@ -67,8 +68,7 @@ static int luaPause(lua_State* L) {
             g_canvas.resume();
         else
             g_canvas.pause();
-        HyprlandAPI::addNotification(PHANDLE, g_canvas.paused() ? "Expanse paused: windows are back where they were" : "Expanse resumed", CHyprColor{0.54F, 0.71F, 0.98F, 1.F},
-                                     2500);
+        Toast::show(g_canvas.paused() ? "Expanse paused: windows are back where they were" : "Expanse resumed");
         return 0;
     });
 }
@@ -98,7 +98,7 @@ static int luaHop(lua_State* L) {
 static constexpr const char* USAGE =
     "usage: hyprctl expanse [state | toggle | open | close | hop <left|right|up|down> | focus <app> | pick <x> <y> | space <name> | tidy | fit | zoom <scale> | "
     "pan <dx> <dy> | select all | restore | pause [toggle] | resume | autocentre <on|off|toggle> | wallpaper <on|off|toggle|default> | "
-    "corner [off|all|bottom|top_left|top_right|bottom_left|bottom_right|default] | keys | screen [<w> <h>] | pinch <scale>...]\n";
+    "corner [off|all|bottom|top_left|top_right|bottom_left|bottom_right|default] | keys | screen [<w> <h>] | pinch <scale>... | perf [start [gpu]|stop]]\n";
 
 // The canvas's own keys (binds are in Omarchy's key guide), for the menu's Shortcuts.
 static constexpr const char* KEYS = R"(Expanse
@@ -127,7 +127,21 @@ static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
 
     if (verb.empty() || verb == "state")
         ;
-    else if (verb == "toggle")
+    else if (verb == "perf") {
+        // Frame timing, to find jank: start, do something, stop for the frames as JSON.
+        std::string word;
+        words >> word;
+        if (word == "start") {
+            std::string gpu;
+            words >> gpu;
+            Perf::start(gpu == "gpu");
+        }
+        else if (word == "stop")
+            return Perf::stop();
+        else
+            return std::format("perf: {}\n", Perf::recording() ? "recording" : "off");
+        return "ok\n";
+    } else if (verb == "toggle")
         g_canvas.toggle();
     else if (verb == "open")
         g_canvas.open();
@@ -259,6 +273,8 @@ static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
             g_canvas.setAutoCentre(word == "on");
         else
             return USAGE;
+        // As the Mac's menu item does.
+        Toast::show(g_canvas.autoCentre() ? "Auto-centre on" : "Auto-centre off: windows stay put");
     } else
         return USAGE;
 
@@ -298,8 +314,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
     auto& events = Event::bus()->m_events;
     g_listeners.push_back(events.render.pre.listen([](PHLMONITOR monitor) {
+        Perf::frameStart(monitor);
+        Perf::CPluginTime timed;
         Expanse::Render::updateParking(!g_canvas.paused(), g_pInputManager->getMouseCoordsInternal());
         g_canvas.onPreRender(monitor);
+        Expanse::Render::beforeFrame(monitor);
         // While the canvas is up it swallows pointer moves, so Hyprland's
         // record of the last one stays put and it doesn't report moving back
         // to that spot; the corner reads the pointer each frame instead.
@@ -325,8 +344,14 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_listeners.push_back(events.input.keyboard.key.listen(
         [CANCEL](IKeyboard::SKeyEvent event, Event::SCallbackInfo& info) { CANCEL(g_canvas.onKey(event.keycode, event.state == WL_KEYBOARD_KEY_STATE_PRESSED), info); }));
     g_listeners.push_back(events.window.active.listen([](PHLWINDOW window, Desktop::eFocusReason reason) { g_canvas.onFocus(window, reason); }));
-    g_listeners.push_back(events.window.openLate.listen([](PHLWINDOW window) { g_canvas.onWindowOpen(window); }));
-    g_listeners.push_back(events.window.close.listen([](PHLWINDOW window) { g_canvas.onWindowClose(window); }));
+    g_listeners.push_back(events.window.openLate.listen([](PHLWINDOW window) {
+        g_canvas.onWindowOpen(window);
+        g_canvas.damageDesktopMaps();
+    }));
+    g_listeners.push_back(events.window.close.listen([](PHLWINDOW window) {
+        g_canvas.onWindowClose(window);
+        g_canvas.damageDesktopMaps();
+    }));
     g_listeners.push_back(events.window.fullscreen.listen([](PHLWINDOW window) { g_canvas.onFullscreen(window); }));
     g_listeners.push_back(events.monitor.layoutChanged.listen([] {
         g_hotCorner.disarm();
@@ -337,7 +362,10 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             g_hotCorner.disarm();
             g_canvas.onScreenChanged();
         }));
-    g_listeners.push_back(events.workspace.active.listen([](PHLWORKSPACE workspace) { g_canvas.onWorkspaceChanged(workspace); }));
+    g_listeners.push_back(events.workspace.active.listen([](PHLWORKSPACE workspace) {
+        g_canvas.onWorkspaceChanged(workspace);
+        g_canvas.damageDesktopMaps();
+    }));
 
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "overview", luaOverview);
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "hop", luaHop);

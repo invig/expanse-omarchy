@@ -6,6 +6,7 @@
 
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
+#include <hyprland/src/debug/log/Logger.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
@@ -16,13 +17,16 @@
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/render/Renderer.hpp>
+#include <hyprland/src/state/MonitorState.hpp>
 
 #include <wayland-server-core.h>
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <format>
+#include <fstream>
 #include <ranges>
 
 namespace Expanse {
@@ -44,6 +48,26 @@ namespace Expanse {
     constexpr double CLOSE_MIN_WIDTH    = 220.0; // narrower on screen, a window shows no ×
     constexpr Vector2D MINIMAP_SIZE     = {208.0, 136.0};
     constexpr double   MINIMAP_MARGIN   = 16.0;
+    constexpr auto     TEXT_SETTLE      = std::chrono::milliseconds(150); // still this long, labels are made at their size
+
+    // Omarchy's theme says whether it's light (colors.toml's mode, or the
+    // older light.mode marker beside it).
+    static bool themeIsLight() {
+        const char* STATE = std::getenv("XDG_STATE_HOME");
+        const char* HOME  = std::getenv("HOME");
+        const std::string THEME = STATE && *STATE ? std::string{STATE} + "/omarchy/current/theme" : HOME ? std::string{HOME} + "/.local/state/omarchy/current/theme" : "";
+        if (THEME.empty())
+            return false;
+        if (std::ifstream{THEME + "/light.mode"})
+            return true;
+        std::ifstream colors{THEME + "/colors.toml"};
+        for (std::string line; std::getline(colors, line);) {
+            std::erase_if(line, [](char c) { return c == ' ' || c == '\t' || c == '\'' || c == '"'; });
+            if (line == "mode=light")
+                return true;
+        }
+        return false;
+    }
 
     static double easeOutCubic(double t) {
         return 1.0 - std::pow(1.0 - t, 3.0);
@@ -154,6 +178,8 @@ namespace Expanse {
 
         m_monitor   = MONITOR;
         m_workspace = MONITOR->m_activeWorkspace;
+        m_light     = themeIsLight();
+        m_diving    = false;
         m_target.reset();
         m_hoverSpace.reset();
         m_selected.clear();
@@ -165,15 +191,16 @@ namespace Expanse {
         return true;
     }
 
-    void CCanvas::open() {
+    void CCanvas::open(PHLMONITOR monitor) {
         if (m_state == STATE_OVERVIEW) {
             animateTo(fitCamera(OVERVIEW_MAX_SCALE), STATE_OVERVIEW, CAMERA_SECONDS);
             return;
         }
-        if (live() || !begin())
+        if (live() || !begin(monitor))
             return;
 
-        m_hover        = Desktop::focusState()->window();
+        // As on the Mac, only the window the pointer moves onto is ringed.
+        m_hover.reset();
         m_returnCamera = m_camera;
         animateTo(fitCamera(OVERVIEW_MAX_SCALE), STATE_OPENING, CAMERA_SECONDS);
     }
@@ -182,7 +209,7 @@ namespace Expanse {
         if (live() || !begin())
             return;
 
-        m_hover = Desktop::focusState()->window();
+        m_hover.reset();
         m_returnCamera.reset();
         m_animating = false;
         m_state     = STATE_OVERVIEW;
@@ -196,6 +223,7 @@ namespace Expanse {
         m_target.reset();
         m_selected.clear();
         // Straight back where you were, unless you've moved around since zooming out.
+        m_diving = true;
         animateTo(m_returnCamera.value_or(centredOn(viewCentre().pos(), 1.0)), STATE_GLIDING, DIVE_SECONDS);
     }
 
@@ -224,6 +252,9 @@ namespace Expanse {
         m_target       = window;
         m_hover        = window;
         m_fromKeyboard = fromKeyboard;
+        // From the canvas, it stays drawn as you dive in; a hop on from a
+        // glide is a hop.
+        m_diving = !FROMIDLE && m_state != STATE_GLIDING;
         m_selected.clear();
         // On top for the whole glide, not only once it lands.
         raise(window);
@@ -252,9 +283,14 @@ namespace Expanse {
             }
             case STATE_OPENING:
             case STATE_OVERVIEW: {
-                // On the canvas: the highlight moves and the view follows.
-                const auto FROM = m_hover.lock();
-                const bool HAS  = FROM && isCanvasWindow(FROM);
+                // On the canvas: the highlight moves and the view follows,
+                // from the highlighted window, or the top one.
+                auto FROM = m_hover.lock();
+                if (!FROM || !isCanvasWindow(FROM)) {
+                    const auto WINDOWS = canvasWindows();
+                    FROM               = WINDOWS.empty() ? nullptr : WINDOWS.back();
+                }
+                const bool HAS  = FROM != nullptr;
                 const auto NEXT = nearest(direction, HAS ? canvasBox(FROM) : viewCentre(), HAS ? FROM : nullptr);
                 if (!NEXT)
                     return;
@@ -279,7 +315,13 @@ namespace Expanse {
                     if (!begin())
                         return;
                 }
-                if (const auto NEXT = nearest(direction, HAS ? canvasBox(FOCUSED) : viewCentre(), HAS ? FOCUSED : nullptr))
+                const auto NEXT = nearest(direction, HAS ? canvasBox(FOCUSED) : viewCentre(), HAS ? FOCUSED : nullptr);
+                if (NEXT && !m_autoCentre && !FULLSCREEN && fullyVisible(NEXT)) {
+                    // Auto-centre off, as on the Mac: a window already on
+                    // screen is focused where it is.
+                    raise(NEXT);
+                    focusLikeMoveFocus(NEXT);
+                } else if (NEXT)
                     glideTo(NEXT, true);
                 else if (FULLSCREEN)
                     restoreFullscreen();
@@ -321,6 +363,7 @@ namespace Expanse {
         m_animSeconds = seconds;
         m_animating   = true;
         m_state       = state;
+        m_animFrames  = {};
         damage();
 
         // Animations advance with the monitor's frames. One that stops
@@ -343,8 +386,17 @@ namespace Expanse {
         if (!m_animating)
             return;
         const auto   MONITOR = m_monitor.lock();
-        const double ELAPSED = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_animStart).count();
+        const auto   NOW     = std::chrono::steady_clock::now();
+        const double ELAPSED = std::chrono::duration<double>(NOW - m_animStart).count();
         const double T       = late || m_animSeconds <= 0.0 ? 1.0 : std::clamp(ELAPSED / m_animSeconds, 0.0, 1.0);
+        if (!late) {
+            m_cameraChangedAt = NOW;
+            if (m_animFrames.frames++ == 0)
+                m_animFrames.first = NOW;
+            else
+                m_animFrames.maxGap = std::max(m_animFrames.maxGap, std::chrono::duration<double>(NOW - m_animFrames.last).count());
+            m_animFrames.last = NOW;
+        }
 
         m_camera = mix(m_from, m_to, easeOutCubic(T), MONITOR ? MONITOR->m_size : Vector2D{1, 1});
         if (T < 1.0)
@@ -352,6 +404,11 @@ namespace Expanse {
 
         m_camera    = m_to;
         m_animating = false;
+        const double FIRST = m_animFrames.frames ? std::chrono::duration<double>(m_animFrames.first - m_animStart).count() : ELAPSED;
+        m_lastAnimation    = std::format("first frame after {}ms, {} frames, max gap {}ms{}", sc<int>(FIRST * 1000), m_animFrames.frames,
+                                         sc<int>(m_animFrames.maxGap * 1000), late ? ", ended by the timer" : "");
+        if (late || m_animFrames.maxGap > 0.034 || FIRST > 0.034)
+            Log::logger->log(Log::INFO, "[expanse] slow: animation {}", m_lastAnimation);
         if (m_state == STATE_OPENING)
             m_state = STATE_OVERVIEW;
         else if (m_state == STATE_GLIDING) {
@@ -366,9 +423,11 @@ namespace Expanse {
     }
 
     void CCanvas::setCamera(const SCamera& camera) {
-        m_camera       = camera;
-        m_camera.scale = std::clamp(camera.scale, MIN_SCALE, MAX_SCALE);
-        m_animating    = false;
+        m_camera          = camera;
+        m_camera.scale    = std::clamp(camera.scale, MIN_SCALE, MAX_SCALE);
+        m_animating       = false;
+        m_diving          = false;
+        m_cameraChangedAt = std::chrono::steady_clock::now();
         if (m_state == STATE_OPENING)
             m_state = STATE_OVERVIEW;
         damage();
@@ -381,6 +440,36 @@ namespace Expanse {
     void CCanvas::damage() const {
         if (const auto MONITOR = m_monitor.lock())
             g_pHyprRenderer->damageMonitor(MONITOR);
+    }
+
+    bool CCanvas::cameraMoving() const {
+        return m_animating || m_coast.active || std::chrono::steady_clock::now() - m_cameraChangedAt < TEXT_SETTLE;
+    }
+
+    void CCanvas::wantFrame() {
+        m_frameWanted = true;
+    }
+
+    bool CCanvas::takeFrameRequest(const PHLMONITOR& monitor) {
+        if (!live() || monitor != m_monitor.lock()) {
+            m_frameWanted = m_frameWanted && live();
+            return false;
+        }
+        // Moving, one more once it's still (labels at their size), and any asked for.
+        const bool WANT = m_animating || m_coast.active || m_frameWanted || cameraMoving();
+        m_frameWanted   = false;
+        return WANT;
+    }
+
+    bool CCanvas::interruptDive() {
+        // As on the Mac: a click, scroll or pinch while diving in stops the
+        // camera where it is, still on the canvas.
+        if (m_state != STATE_GLIDING || !m_diving || !m_animating)
+            return false;
+        m_target.reset();
+        m_state = STATE_OVERVIEW;
+        setCamera(m_camera);
+        return true;
     }
 
     void CCanvas::pan(const Vector2D& screenDelta) {
@@ -429,6 +518,8 @@ namespace Expanse {
             return;
 
         advance(false);
+        coast();
+        updateCursor();
 
         // Hyprland reports damage in untransformed coordinates, so while the
         // camera is in use the whole monitor is redrawn every frame.
@@ -482,6 +573,7 @@ namespace Expanse {
 
         m_camera = homeCamera();
         m_state  = STATE_IDLE;
+        m_diving = false;
         m_drag   = {};
         m_guides.clear();
         m_selected.clear();
@@ -518,6 +610,7 @@ namespace Expanse {
         m_target.reset();
         m_hover.reset();
         g_pHyprRenderer->damageMonitor(MONITOR);
+        updateCursor();
         scheduleSave();
         placeUnplaced();
     }
@@ -825,6 +918,14 @@ namespace Expanse {
         return m_state == STATE_OPENING || m_state == STATE_OVERVIEW;
     }
 
+    bool CCanvas::decorated() const {
+        return showsCanvas() || (m_state == STATE_GLIDING && m_diving);
+    }
+
+    bool CCanvas::lightTheme() const {
+        return m_light;
+    }
+
     PHLMONITOR CCanvas::monitor() const {
         if (live())
             return m_monitor.lock();
@@ -874,7 +975,7 @@ namespace Expanse {
 
     bool CCanvas::showsClose(PHLWINDOW window) const {
         // Hovering a window in a selection shows × on every selected window: it closes them all.
-        if (m_state != STATE_OVERVIEW || m_drag.moved || screenBox(window).w < CLOSE_MIN_WIDTH)
+        if ((m_state != STATE_OVERVIEW && !(m_state == STATE_GLIDING && m_diving)) || m_drag.moved || screenBox(window).w < CLOSE_MIN_WIDTH)
             return false;
         const auto HOVER = m_hover.lock();
         if (!HOVER)
@@ -913,25 +1014,60 @@ namespace Expanse {
         return {(screen.x - offset.x) / scale + bounds.x, (screen.y - offset.y) / scale + bounds.y};
     }
 
-    std::optional<SMinimap> CCanvas::minimap() const {
-        const auto MONITOR = monitor();
-        if (!MONITOR || !showsCanvas())
-            return std::nullopt;
-
+    static SMinimap makeMinimap(const PHLMONITOR& monitor, const CBox& viewport, std::vector<CBox> windows) {
         SMinimap map;
-        map.box      = {MONITOR->m_position.x + MONITOR->m_size.x - MINIMAP_MARGIN - MINIMAP_SIZE.x, MONITOR->m_position.y + MONITOR->m_size.y - MINIMAP_MARGIN - MINIMAP_SIZE.y,
+        map.box      = {monitor->m_position.x + monitor->m_size.x - MINIMAP_MARGIN - MINIMAP_SIZE.x, monitor->m_position.y + monitor->m_size.y - MINIMAP_MARGIN - MINIMAP_SIZE.y,
                         MINIMAP_SIZE.x, MINIMAP_SIZE.y};
         map.area     = {map.box.x + 10, map.box.y + 10, map.box.w - 20, map.box.h - 36};
-        map.viewport = viewInCanvas();
+        map.viewport = viewport;
+        map.windows  = std::move(windows);
         CBox bounds  = map.viewport;
-        for (const auto& window : canvasWindows()) {
-            map.windows.push_back(canvasBox(window));
-            bounds = unite(bounds, map.windows.back());
-        }
+        for (const auto& window : map.windows)
+            bounds = unite(bounds, window);
         map.bounds = {bounds.x - bounds.w * 0.04, bounds.y - bounds.h * 0.04, bounds.w * 1.08, bounds.h * 1.08};
         map.scale  = std::min(map.area.w / std::max(map.bounds.w, 1.0), map.area.h / std::max(map.bounds.h, 1.0));
         map.offset = {map.area.x + (map.area.w - map.bounds.w * map.scale) / 2, map.area.y + (map.area.h - map.bounds.h * map.scale) / 2};
         return map;
+    }
+
+    std::optional<SMinimap> CCanvas::minimap() const {
+        const auto MONITOR = monitor();
+        if (!MONITOR || !decorated())
+            return std::nullopt;
+        std::vector<CBox> windows;
+        for (const auto& window : canvasWindows())
+            windows.push_back(canvasBox(window));
+        return makeMinimap(MONITOR, viewInCanvas(), std::move(windows));
+    }
+
+    std::optional<SMinimap> CCanvas::desktopMinimap(const PHLMONITOR& monitor) const {
+        const auto WORKSPACE = monitor ? monitor->m_activeWorkspace : nullptr;
+        if (m_paused || !WORKSPACE || WORKSPACE->m_isSpecialWorkspace || (live() && monitor == m_monitor.lock() && decorated()))
+            return std::nullopt;
+        std::vector<CBox> windows;
+        for (const auto& window : Desktop::windowState()->windows())
+            if (window->m_isMapped && !window->m_pinned && window->m_workspace == WORKSPACE && !Fullscreen::controller()->isFullscreen(window))
+                windows.push_back(canvasBox(window));
+        // Mid-glide, the view moves over it.
+        const bool GLIDING = live() && monitor == m_monitor.lock();
+        return makeMinimap(monitor, GLIDING ? viewInCanvas() : CBox{monitor->m_position, monitor->m_size}, std::move(windows));
+    }
+
+    std::optional<SSpacesBar> CCanvas::desktopSpacesBar(const PHLMONITOR& monitor) const {
+        const auto MAP = desktopMinimap(monitor);
+        return MAP ? spacesBarBeside(monitor, monitor->m_activeWorkspace, *MAP) : std::nullopt;
+    }
+
+    void CCanvas::damageDesktopMaps() const {
+        for (const auto& monitor : State::monitorState()->monitors()) {
+            const auto MAP = monitor && monitor->m_enabled ? desktopMinimap(monitor) : std::nullopt;
+            if (!MAP)
+                continue;
+            CBox area = MAP->box;
+            if (const auto BAR = spacesBarBeside(monitor, monitor->m_activeWorkspace, *MAP))
+                area = unite(area, BAR->box.copy().expand(20));
+            g_pHyprRenderer->damageBox(area);
+        }
     }
 
     std::vector<PHLWINDOW> CCanvas::canvasWindows() const {
@@ -1116,12 +1252,12 @@ namespace Expanse {
         const auto MAP       = minimap();
         const auto HINT      = m_offscreenHint.lock();
         const auto SCROLLED  = scrolledFor(WORKSPACE);
-        return std::format(R"({{"state":"{}","paused":{},"workspace":"{}","scale":{:.3f},"origin":[{:.1f},{:.1f}],"scrolled":[{:.1f},{:.1f}],"autoCentre":{},"wallpaper":{},"hotCorner":"{}","hover":"{}","target":"{}","marquee":{},"minimap":{},"offscreenNotice":"{}","windows":[{}],"spaces":[{}]}})",
+        return std::format(R"({{"state":"{}","paused":{},"workspace":"{}","scale":{:.3f},"origin":[{:.1f},{:.1f}],"scrolled":[{:.1f},{:.1f}],"autoCentre":{},"wallpaper":{},"hotCorner":"{}","hover":"{}","target":"{}","marquee":{},"minimap":{},"offscreenNotice":"{}","lastAnimation":"{}","windows":[{}],"spaces":[{}]}})",
                            STATES[m_state], m_paused, WORKSPACE ? jsonEscape(WORKSPACE->m_name) : "", m_camera.scale, m_camera.origin.x, m_camera.origin.y, SCROLLED.x,
                            SCROLLED.y, m_autoCentre, wallpaper(), jsonEscape(g_hotCorner.corner()), HOVER ? jsonEscape(HOVER->m_title) : "", TARGET ? jsonEscape(TARGET->m_title) : "",
                            MARQUEE ? std::format("[{:.1f},{:.1f},{:.1f},{:.1f}]", MARQUEE->x, MARQUEE->y, MARQUEE->w, MARQUEE->h) : "null",
-                           MAP ? std::format("[{:.0f},{:.0f},{:.0f},{:.0f}]", MAP->box.x, MAP->box.y, MAP->box.w, MAP->box.h) : "null", HINT ? jsonEscape(HINT->m_class) : "", windows,
-                           spaces) +
+                           MAP ? std::format("[{:.0f},{:.0f},{:.0f},{:.0f}]", MAP->box.x, MAP->box.y, MAP->box.w, MAP->box.h) : "null", HINT ? jsonEscape(HINT->m_class) : "", m_lastAnimation,
+                           windows, spaces) +
             "\n";
     }
 
@@ -1141,6 +1277,9 @@ namespace Expanse {
         m_swallowedKeys.clear();
         m_spaceHeld = false;
         m_pinching  = false;
+        m_diving    = false;
         m_camera    = homeCamera();
+        stopCoasting();
+        updateCursor();
     }
 }
