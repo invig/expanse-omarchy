@@ -921,6 +921,57 @@ if touchpad(0.5, 0.25):
 else:
     print("SKIP  touchpad (no root in the VM: set VM_ASKPASS to an askpass program there)")
 
+# ===== Try Omarchy's pinch device, the one the Mac's trackpad drives: two
+# fingers as multi-touch events through QMP, then the guest's kernel and
+# libinput, as a pinch on the trackpad arrives.
+import socket
+
+
+def device_pinch(start, end, steps=29):
+    connection = socket.socket(socket.AF_UNIX)
+    connection.connect(QMP)
+    stream = connection.makefile("rw")
+
+    def call(command, **arguments):
+        stream.write(json.dumps({"execute": command, **({"arguments": arguments} if arguments else {})}) + "\n")
+        stream.flush()
+        while True:
+            reply = json.loads(stream.readline())
+            if "return" in reply or "error" in reply:
+                return reply
+
+    def touch(kind, slot, tracking, axis="x", value=0):
+        return {"type": "mtt", "data": {"type": kind, "slot": slot, "tracking-id": tracking, "axis": axis, "value": value}}
+
+    stream.readline()
+    call("qmp_capabilities")
+    middle = 16384
+    half = lambda spread: int(spread * 16384)
+    ok = "return" in call("input-send-event", events=[
+        touch("begin", 0, 1, "x", middle - half(start)), touch("data", 0, 1, "x", middle - half(start)), touch("data", 0, 1, "y", middle),
+        touch("begin", 1, 2, "x", middle + half(start)), touch("data", 1, 2, "x", middle + half(start)), touch("data", 1, 2, "y", middle)])
+    for i in range(1, steps + 1):
+        spread = start + (end - start) * i / steps
+        call("input-send-event", events=[touch("data", 0, 1, "x", middle - half(spread)), touch("data", 1, 2, "x", middle + half(spread))])
+        time.sleep(0.015)
+    call("input-send-event", events=[touch("end", 0, 1), touch("end", 1, 2)])
+    connection.close()
+    time.sleep(0.8)
+    return ok
+
+
+point(*empty_spot(ctl()))
+if "pinch-touchpad" in vm("hyprctl devices -j") and device_pinch(0.5, 0.25):
+    s = ctl()
+    check("Try Omarchy's pinch device: pinching in on the desktop zooms out", s["state"] == "overview" and s["scale"] < 0.8, f"{s['state']} {s['scale']}")
+    before = ctl()["scale"]
+    device_pinch(0.25, 0.5)
+    check("Try Omarchy's pinch device: spreading zooms in", ctl()["scale"] > before * 1.4, f"{before} -> {ctl()['scale']}")
+    qmp("key", "esc")
+    settle()
+else:
+    print("SKIP  Try Omarchy's pinch device (not in this VM)")
+
 # ===== Several monitors (a headless one beside the screen).
 vm("hyprctl output create headless SWEEP-2")
 wait(3)
