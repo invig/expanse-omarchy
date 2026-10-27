@@ -10,9 +10,11 @@
 #include <hyprland/src/layout/target/Target.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/output/Monitor.hpp>
+#include <hyprland/src/state/MonitorState.hpp>
 
 #include <wayland-server-core.h>
 
+#include <algorithm>
 #include <cmath>
 
 // Following you between screens, as on the Mac: the canvas keeps a home
@@ -43,12 +45,13 @@ namespace Expanse {
         return nullptr;
     }
 
-    bool CCanvas::isDerived() const {
-        // True while the canvas is a tightened version of the home layout:
-        // some window is smaller than its chosen size because this screen is.
+    bool CCanvas::isDerived(const PHLWORKSPACE& workspace) const {
+        // True while the workspace's canvas is a tightened version of its home
+        // layout: some window is smaller than its chosen size because this
+        // screen is.
         for (const auto& entry : m_originals) {
             const auto WINDOW = entry.window.lock();
-            if (!WINDOW || fullscreen(WINDOW))
+            if (!WINDOW || WINDOW->m_workspace != workspace || fullscreen(WINDOW))
                 continue;
             const auto SIZE = goalBox(WINDOW).size();
             if (SIZE.x < entry.preferred.x - 1 || SIZE.y < entry.preferred.y - 1)
@@ -73,18 +76,25 @@ namespace Expanse {
     }
 
     void CCanvas::updateHome() {
-        // While no window is shrunk for a smaller screen, the canvas layout is the home layout.
-        if (isDerived())
-            return;
+        // While no window on a workspace is shrunk for a smaller screen, its
+        // canvas layout is its home layout.
+        std::vector<std::pair<PHLWORKSPACE, bool>> derived;
+        const auto DERIVED = [&](const PHLWORKSPACE& workspace) {
+            for (const auto& [ws, is] : derived)
+                if (ws == workspace)
+                    return is;
+            derived.emplace_back(workspace, isDerived(workspace));
+            return derived.back().second;
+        };
         for (auto& entry : m_originals)
-            if (const auto WINDOW = entry.window.lock(); WINDOW && WINDOW->m_workspace && !fullscreen(WINDOW))
+            if (const auto WINDOW = entry.window.lock(); WINDOW && WINDOW->m_workspace && !fullscreen(WINDOW) && !DERIVED(WINDOW->m_workspace))
                 entry.home = goalBox(WINDOW).pos() + scrolledFor(WINDOW->m_workspace);
     }
 
     void CCanvas::noteUserMove(const PHLWINDOW& window, const Vector2D& delta) {
         // On a smaller screen the home layout moves by the same amount, so the
         // move survives going back to the big screen.
-        if (!isDerived())
+        if (!isDerived(window->m_workspace))
             return;
         if (auto* entry = tracked(window))
             entry->home = entry->home + delta;
@@ -181,13 +191,16 @@ namespace Expanse {
 
     void CCanvas::onScreenChanged() {
         // Wait for the change to settle, then fit the canvas to the screen.
+        // Meanwhile focus moving about isn't you going to a window (as on the
+        // Mac, where window moves are ignored while macOS reshuffles them).
+        m_settledAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(RELAYOUT_DELAY + 500);
         if (m_paused || !g_pCompositor || !g_pCompositor->m_wlEventLoop)
             return;
         if (!m_relayoutTimer)
             m_relayoutTimer = wl_event_loop_add_timer(
                 g_pCompositor->m_wlEventLoop,
                 [](void* data) {
-                    sc<CCanvas*>(data)->relayout();
+                    sc<CCanvas*>(data)->relayoutAll();
                     return 0;
                 },
                 this);
@@ -201,24 +214,86 @@ namespace Expanse {
             onScreenChanged(); // once the canvas is back at 100%
             return;
         }
+        followWorkspaces();
         const auto WORKSPACE = workspace();
         if (!WORKSPACE)
             return;
+
+        const CBox     SCREEN = usableArea();
+        const auto     LAST   = m_lastScreens.contains(WORKSPACE->m_name) ? std::optional{m_lastScreens[WORKSPACE->m_name]} : std::nullopt;
+        const Vector2D MOVED  = LAST ? SCREEN.pos() - LAST->pos() : Vector2D{};
+        const Vector2D SCROLL = scrolledFor(WORKSPACE);
+        if (MOVED != Vector2D{}) {
+            // On another monitor, or this one moved. Hyprland brings floating
+            // windows along when it moves a workspace off a monitor that went
+            // away, but not back again: see how far they came, so their spots
+            // on the canvas read as they were before anything else.
+            m_scrolled[WORKSPACE->m_name] = SCROLL - cameWith(WORKSPACE, SCROLL, MOVED);
+        }
 
         for (const auto& window : canvasWindows())
             noteOriginal(window);
         noteSizes();
         updateHome();
 
-        const CBox SCREEN = usableArea();
-        if (m_lastScreen && (std::abs(m_lastScreen->w - SCREEN.w) > 0.5 || std::abs(m_lastScreen->h - SCREEN.h) > 0.5)) {
+        // The canvas follows its monitor: the windows keep their places on the screen.
+        if (MOVED != Vector2D{})
+            m_scrolled[WORKSPACE->m_name] = SCROLL - MOVED;
+
+        if (LAST && (std::abs(LAST->w - SCREEN.w) > 0.5 || std::abs(LAST->h - SCREEN.h) > 0.5)) {
             // Whatever was in the middle of the old screen stays in the middle of the new one.
-            m_scrolled[WORKSPACE->m_name] = scrolledFor(WORKSPACE) - (SCREEN.middle() - m_lastScreen->middle()).round();
+            m_scrolled[WORKSPACE->m_name] = scrolledFor(WORKSPACE) - ((SCREEN.size() - LAST->size()) / 2.0).round();
         }
-        m_lastScreen = SCREEN;
+        m_lastScreens[WORKSPACE->m_name] = SCREEN;
 
         fitLayoutToScreen(0, false);
         damage();
         scheduleSave();
+    }
+
+    Vector2D CCanvas::cameWith(const PHLWORKSPACE& workspace, const Vector2D& scroll, const Vector2D& moved) const {
+        // How far the workspace's windows moved since their spots were noted:
+        // the middle value, so a window you moved yourself doesn't count. With
+        // nothing to go by, as far as the monitor did.
+        std::vector<double> xs, ys;
+        for (const auto& entry : m_originals) {
+            const auto WINDOW = entry.window.lock();
+            if (!WINDOW || WINDOW->m_workspace != workspace || fullscreen(WINDOW))
+                continue;
+            const Vector2D D = goalBox(WINDOW).pos() + scroll - entry.home;
+            xs.push_back(D.x);
+            ys.push_back(D.y);
+        }
+        if (xs.empty())
+            return moved;
+        std::ranges::nth_element(xs, xs.begin() + xs.size() / 2);
+        std::ranges::nth_element(ys, ys.begin() + ys.size() / 2);
+        return {xs[xs.size() / 2], ys[ys.size() / 2]};
+    }
+
+    void CCanvas::relayoutOn(const PHLMONITOR& monitor) {
+        // Only a workspace whose screen changed: fitting also shrinks windows
+        // bigger than the screen. One never laid out just notes its screen.
+        m_layoutMonitor      = monitor;
+        const auto WORKSPACE = workspace();
+        const CBox SCREEN    = usableArea();
+        if (WORKSPACE) {
+            const auto IT = m_lastScreens.find(WORKSPACE->m_name);
+            if (IT == m_lastScreens.end())
+                m_lastScreens[WORKSPACE->m_name] = SCREEN;
+            else if (IT->second.pos() != SCREEN.pos() || IT->second.size() != SCREEN.size())
+                relayout();
+        }
+        m_layoutMonitor.reset();
+    }
+
+    void CCanvas::relayoutAll() {
+        if (live()) {
+            onScreenChanged(); // once the canvas is back at 100%
+            return;
+        }
+        for (const auto& monitor : State::monitorState()->monitors())
+            if (monitor && monitor->m_enabled && monitor->m_activeWorkspace)
+                relayoutOn(monitor);
     }
 }

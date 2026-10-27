@@ -2,6 +2,7 @@
 
 #include "Canvas.hpp"
 
+#include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
@@ -140,10 +141,10 @@ namespace Expanse {
         }
     }
 
-    bool CCanvas::begin() {
+    bool CCanvas::begin(PHLMONITOR monitor) {
         if (m_paused)
             return false;
-        const auto MONITOR = Desktop::focusState()->monitor();
+        const auto MONITOR = monitor ? monitor : Desktop::focusState()->monitor();
         if (!MONITOR || !MONITOR->m_activeWorkspace)
             return false;
 
@@ -199,7 +200,8 @@ namespace Expanse {
             return;
 
         const bool FROMIDLE = !live();
-        if (FROMIDLE && !begin())
+        // On the window's own monitor, which isn't always the focused one.
+        if (FROMIDLE && !begin(window->m_monitor.lock()))
             return;
 
         if (!isCanvasWindow(window))
@@ -223,7 +225,7 @@ namespace Expanse {
     void CCanvas::glideLater(PHLWINDOW window, bool fromKeyboard) {
         // Out of the event that asked for it: gliding floats and moves windows.
         g_pEventLoopManager->doLater([this, ref = PHLWINDOWREF{window}, fromKeyboard] {
-            if (const auto WINDOW = ref.lock(); WINDOW && !live() && m_autoCentre && isCanvasWindow(WINDOW) && !fullyVisible(WINDOW))
+            if (const auto WINDOW = ref.lock(); WINDOW && !live() && m_autoCentre && offItsScreen(WINDOW))
                 glideTo(WINDOW, fromKeyboard);
         });
     }
@@ -311,6 +313,47 @@ namespace Expanse {
         m_animating   = true;
         m_state       = state;
         damage();
+
+        // Animations advance with the monitor's frames. One that stops
+        // drawing (asleep, or headless) would leave the canvas up and holding
+        // the pointer: once the time is up, it ends anyway.
+        if (!g_pCompositor || !g_pCompositor->m_wlEventLoop)
+            return;
+        if (!m_animationTimer)
+            m_animationTimer = wl_event_loop_add_timer(
+                g_pCompositor->m_wlEventLoop,
+                [](void* data) {
+                    sc<CCanvas*>(data)->advance(true);
+                    return 0;
+                },
+                this);
+        wl_event_source_timer_update(m_animationTimer, sc<int>(seconds * 1000) + 250);
+    }
+
+    void CCanvas::advance(bool late) {
+        if (!m_animating)
+            return;
+        const auto   MONITOR = m_monitor.lock();
+        const double ELAPSED = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_animStart).count();
+        const double T       = late || m_animSeconds <= 0.0 ? 1.0 : std::clamp(ELAPSED / m_animSeconds, 0.0, 1.0);
+
+        m_camera = mix(m_from, m_to, easeOutCubic(T), MONITOR ? MONITOR->m_size : Vector2D{1, 1});
+        if (T < 1.0)
+            return;
+
+        m_camera    = m_to;
+        m_animating = false;
+        if (m_state == STATE_OPENING)
+            m_state = STATE_OVERVIEW;
+        else if (m_state == STATE_GLIDING) {
+            // Moving windows from inside a frame is unsafe; the camera holds
+            // the final view until the move lands.
+            g_pEventLoopManager->doLater([this] {
+                if (m_state == STATE_GLIDING && !m_animating)
+                    commit();
+            });
+        }
+        damage();
     }
 
     void CCanvas::setCamera(const SCamera& camera) {
@@ -371,30 +414,12 @@ namespace Expanse {
     }
 
     void CCanvas::onPreRender(PHLMONITOR monitor) {
+        if (!m_paused)
+            followWorkspaces();
         if (!live() || monitor != m_monitor.lock())
             return;
 
-        if (m_animating) {
-            const double ELAPSED = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_animStart).count();
-            const double T       = m_animSeconds > 0.0 ? std::clamp(ELAPSED / m_animSeconds, 0.0, 1.0) : 1.0;
-
-            m_camera = mix(m_from, m_to, easeOutCubic(T), monitor->m_size);
-
-            if (T >= 1.0) {
-                m_camera    = m_to;
-                m_animating = false;
-                if (m_state == STATE_OPENING)
-                    m_state = STATE_OVERVIEW;
-                else if (m_state == STATE_GLIDING) {
-                    // Moving windows from inside a frame is unsafe; the camera
-                    // holds the final view until the move lands.
-                    g_pEventLoopManager->doLater([this] {
-                        if (m_state == STATE_GLIDING && !m_animating)
-                            commit();
-                    });
-                }
-            }
-        }
+        advance(false);
 
         // Hyprland reports damage in untransformed coordinates, so while the
         // camera is in use the whole monitor is redrawn every frame.
@@ -705,7 +730,11 @@ namespace Expanse {
     }
 
     PHLMONITOR CCanvas::monitor() const {
-        return live() ? m_monitor.lock() : Desktop::focusState()->monitor();
+        if (live())
+            return m_monitor.lock();
+        if (const auto LAYOUT = m_layoutMonitor.lock())
+            return LAYOUT;
+        return Desktop::focusState()->monitor();
     }
 
     PHLWORKSPACE CCanvas::workspace() const {
@@ -824,6 +853,17 @@ namespace Expanse {
             area.h = m_screenOverride->y;
         }
         return area;
+    }
+
+    bool CCanvas::offItsScreen(const PHLWINDOW& window) {
+        // Judged on its own monitor: a window parked over another monitor
+        // takes Hyprland's monitor focus there with it.
+        if (!window)
+            return false;
+        m_layoutMonitor = window->m_monitor;
+        const bool OFF  = isCanvasWindow(window) && !fullyVisible(window);
+        m_layoutMonitor.reset();
+        return OFF;
     }
 
     bool CCanvas::fullyVisible(PHLWINDOW window) const {

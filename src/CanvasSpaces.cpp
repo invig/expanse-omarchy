@@ -137,7 +137,21 @@ namespace Expanse {
     }
 
     void CCanvas::onWorkspaceChanged(PHLWORKSPACE target) {
-        if (m_paused || !live() || !target || target->m_monitor != m_monitor || target == m_workspace.lock())
+        if (m_paused || !target)
+            return;
+        if (!live()) {
+            // A workspace last laid out on another screen (its monitor went
+            // away, say) fits this one as it comes into view.
+            if (const auto IT = m_lastScreens.find(target->m_name); IT != m_lastScreens.end())
+                g_pEventLoopManager->doLater([this, ref = PHLWORKSPACEREF{target}] {
+                    const auto WORKSPACE = ref.lock();
+                    const auto MONITOR   = WORKSPACE ? WORKSPACE->m_monitor.lock() : nullptr;
+                    if (MONITOR && MONITOR->m_activeWorkspace == WORKSPACE && !live())
+                        relayoutOn(MONITOR);
+                });
+            return;
+        }
+        if (target->m_monitor != m_monitor || target == m_workspace.lock())
             return;
         g_pEventLoopManager->doLater([this, ref = PHLWORKSPACEREF{target}] {
             if (const auto WORKSPACE = ref.lock())

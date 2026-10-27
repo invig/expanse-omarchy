@@ -228,6 +228,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
     auto& events = Event::bus()->m_events;
     g_listeners.push_back(events.render.pre.listen([](PHLMONITOR monitor) {
+        Expanse::Render::updateParking(!g_canvas.paused());
         g_canvas.onPreRender(monitor);
         // While the canvas is up it swallows pointer moves, so Hyprland's
         // record of the last one stays put and it doesn't report moving back
@@ -255,6 +256,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_listeners.push_back(events.window.openLate.listen([](PHLWINDOW window) { g_canvas.onWindowOpen(window); }));
     g_listeners.push_back(events.window.close.listen([](PHLWINDOW window) { g_canvas.onWindowClose(window); }));
     g_listeners.push_back(events.monitor.layoutChanged.listen([] { g_canvas.onScreenChanged(); }));
+    for (auto* event : {&events.monitor.preAdded, &events.monitor.added, &events.monitor.preRemoved, &events.monitor.removed})
+        g_listeners.push_back(event->listen([](PHLMONITOR) { g_canvas.onScreenChanged(); }));
     g_listeners.push_back(events.workspace.active.listen([](PHLWORKSPACE workspace) { g_canvas.onWorkspaceChanged(workspace); }));
 
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "overview", luaOverview);

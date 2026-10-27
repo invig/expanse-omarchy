@@ -170,10 +170,12 @@ namespace Expanse {
             Vector2D                preferred;
             Vector2D                home;      // absolute canvas
             std::optional<Vector2D> lastSized; // what the canvas last resized it to
+            PHLWORKSPACEREF         workspace; // whose canvas `home` is on
         };
 
         PHLMONITOR             monitor() const;
-        bool                   begin();
+        bool                   begin(PHLMONITOR monitor = nullptr); // on the focused monitor, or this one
+        bool                   offItsScreen(const PHLWINDOW& window); // on its monitor's canvas, not fully on that screen
         CBox                   usableArea() const;
         SCamera                homeCamera() const;
         SCamera                fitCamera(double maxScale) const;
@@ -185,6 +187,7 @@ namespace Expanse {
         PHLWINDOW              nearest(eDirection direction, const CBox& from, PHLWINDOW exclude) const;
         void                   glideLater(PHLWINDOW window, bool fromKeyboard);
         void                   animateTo(const SCamera& to, eState state, double seconds);
+        void                   advance(bool late); // the camera, one frame on (or to the end, late)
         void                   setCamera(const SCamera& camera);
         void                   cameraMovedByUser();
         void                   damage() const;
@@ -196,20 +199,24 @@ namespace Expanse {
         void                   placeNewWindow(PHLWINDOW window, PHLWINDOW anchor);
         Vector2D               scrolledFor(const PHLWORKSPACE& workspace) const;
         void                   noteOriginal(PHLWINDOW window);
+        void                   followWorkspaces();
         bool                   placeFromSaved(PHLWINDOW window, bool exactOnly);
         void                   putWindowsBack();
         void                   stopSaving();
 
         // Screens (CanvasScreen.cpp)
         STracked*              tracked(const PHLWINDOW& window);
-        bool                   isDerived() const;
+        bool                   isDerived(const PHLWORKSPACE& workspace) const;
         void                   noteSizes();
         void                   updateHome();
         void                   noteUserMove(const PHLWINDOW& window, const Vector2D& delta);
         void                   resizeWindow(const PHLWINDOW& window, const Vector2D& size);
         void                   fitToScreen(const PHLWINDOW& window);
         void                   fitLayoutToScreen(double margin, bool tidy);
-        void                   relayout();
+        void                   relayout();       // the focused monitor's workspace (or m_layoutMonitor's)
+        void                   relayoutAll();    // every monitor's
+        void                   relayoutOn(const PHLMONITOR& monitor);
+        Vector2D               cameWith(const PHLWORKSPACE& workspace, const Vector2D& scroll, const Vector2D& moved) const;
         PHLWINDOW              topWindowInView(PHLWINDOW excluding) const;
         void                   settle(const SCamera& camera);
         void                   commit();
@@ -248,9 +255,18 @@ namespace Expanse {
         std::unordered_map<std::string, Vector2D> m_scrolled;
 
         std::vector<STracked>       m_originals;
-        wl_event_source*            m_relayoutTimer = nullptr;
-        std::optional<CBox>         m_lastScreen;
+        // Workspaces as last seen, to follow renames: names key the scroll
+        // and screens kept per workspace.
+        std::vector<std::pair<PHLWORKSPACEREF, std::string>> m_workspaceNames;
+        wl_event_source*            m_relayoutTimer  = nullptr;
+        wl_event_source*            m_animationTimer = nullptr;
+        // Per workspace, the screen its layout was last fitted to: monitors
+        // can differ, and a workspace can move between them.
+        std::unordered_map<std::string, CBox> m_lastScreens;
+        PHLMONITORREF               m_layoutMonitor; // fitting a monitor other than the focused one
         std::optional<Vector2D>     m_screenOverride;
+        // Until then, Hyprland is still moving windows for a monitor change.
+        std::chrono::steady_clock::time_point m_settledAt;
         std::vector<Store::SWindow> m_pool; // saved spots of windows not open now
         bool                        m_paused    = false;
         wl_event_source*            m_saveTimer = nullptr;

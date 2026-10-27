@@ -9,6 +9,9 @@
 #include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/layout/target/Target.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
+#include <hyprland/src/output/Monitor.hpp>
+#include <hyprland/src/state/MonitorState.hpp>
+#include <hyprland/src/state/WorkspaceState.hpp>
 
 #include <wayland-server-core.h>
 
@@ -53,7 +56,48 @@ namespace Expanse {
             .box       = TARGET->position(),
             .preferred = BOX.size(),
             .home      = BOX.pos() + scrolledFor(window->m_workspace),
+            .workspace = window->m_workspace,
         });
+    }
+
+    void CCanvas::followWorkspaces() {
+        // Workspace names key the scroll and screen kept per workspace (and
+        // the saved file). Hyprland renames a workspace now and then (one
+        // whose monitor goes away can come back as another number): its state
+        // goes with it.
+        std::erase_if(m_workspaceNames, [](const auto& seen) { return !seen.first.lock(); });
+        for (const auto& ref : State::workspaceState()->workspaces()) {
+            const auto WORKSPACE = ref.lock();
+            if (!WORKSPACE || WORKSPACE->inert())
+                continue;
+            const auto IT = std::ranges::find_if(m_workspaceNames, [&](const auto& seen) { return seen.first.lock() == WORKSPACE; });
+            if (IT == m_workspaceNames.end()) {
+                m_workspaceNames.emplace_back(WORKSPACE, WORKSPACE->m_name);
+                continue;
+            }
+            if (IT->second == WORKSPACE->m_name)
+                continue;
+            if (const auto OLD = m_scrolled.find(IT->second); OLD != m_scrolled.end()) {
+                m_scrolled[WORKSPACE->m_name] = OLD->second;
+                m_scrolled.erase(IT->second);
+            }
+            if (const auto OLD = m_lastScreens.find(IT->second); OLD != m_lastScreens.end()) {
+                m_lastScreens[WORKSPACE->m_name] = OLD->second;
+                m_lastScreens.erase(IT->second);
+            }
+            IT->second = WORKSPACE->m_name;
+        }
+
+        // A window moved to another workspace (a bind, say) has its spot on
+        // that workspace's canvas where it is now.
+        for (auto& entry : m_originals) {
+            const auto WINDOW = entry.window.lock();
+            if (!WINDOW || !WINDOW->m_workspace || entry.workspace.lock() == WINDOW->m_workspace)
+                continue;
+            entry.workspace = WINDOW->m_workspace;
+            if (!Fullscreen::controller()->isFullscreen(WINDOW))
+                entry.home = goalBox(WINDOW).pos() + scrolledFor(WINDOW->m_workspace);
+        }
     }
 
     void CCanvas::scheduleSave() {
@@ -77,11 +121,15 @@ namespace Expanse {
         if (m_relayoutTimer)
             wl_event_source_remove(m_relayoutTimer);
         m_relayoutTimer = nullptr;
+        if (m_animationTimer)
+            wl_event_source_remove(m_animationTimer);
+        m_animationTimer = nullptr;
     }
 
     void CCanvas::saveNow() {
         if (m_paused)
             return;
+        followWorkspaces();
 
         Store::SLayout layout;
         layout.autoCentre = m_autoCentre;
@@ -143,7 +191,7 @@ namespace Expanse {
         // Where it was before the canvas: the saved record, or what it is now.
         if (!tracked(window)) {
             if (match->original)
-                m_originals.push_back({.window = window, .wasTiled = match->wasTiled, .box = *match->original});
+                m_originals.push_back({.window = window, .wasTiled = match->wasTiled, .box = *match->original, .workspace = window->m_workspace});
             else
                 noteOriginal(window);
         }
@@ -171,7 +219,14 @@ namespace Expanse {
     }
 
     void CCanvas::restoreCanvas() {
-        m_lastScreen = usableArea();
+        // Each monitor's workspace is laid out for that monitor as it is.
+        for (const auto& monitor : State::monitorState()->monitors()) {
+            if (!monitor || !monitor->m_enabled || !monitor->m_activeWorkspace)
+                continue;
+            m_layoutMonitor = monitor;
+            m_lastScreens[monitor->m_activeWorkspace->m_name] = usableArea();
+        }
+        m_layoutMonitor.reset();
         const auto LAYOUT = Store::load();
         if (!LAYOUT)
             return;

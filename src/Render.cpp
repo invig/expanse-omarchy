@@ -5,7 +5,12 @@
 
 #include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
+#include <hyprland/src/desktop/state/WindowState.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/layout/LayoutManager.hpp>
+#include <hyprland/src/layout/supplementary/DragController.hpp>
+#include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
+#include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/Texture.hpp>
@@ -53,7 +58,13 @@ namespace Expanse::Render {
         friend type robbed(SBeingAnimatedTag);
     };
 
+    struct SInputBlockTag {
+        using type = uint32_t Desktop::View::CWindow::*;
+        friend type robbed(SInputBlockTag);
+    };
+
     template struct SRob<SRenderWindowTag, &::Render::IHyprRenderer::renderWindow>;
+    template struct SRob<SInputBlockTag, &Desktop::View::CWindow::m_inputBlockReasons>;
     template struct SRob<SHiddenTag, &Desktop::View::CWindow::m_hidden>;
     template struct SRob<SBeingAnimatedTag, &Hyprutils::Animation::CBaseAnimatedVariable::m_bIsBeingAnimated>;
 
@@ -96,6 +107,7 @@ namespace Expanse::Render {
     struct SFrame {
         PHLMONITORREF          monitor;
         std::vector<PHLWINDOW> hidden;
+        std::vector<PHLWINDOW> foreign; // other monitors' windows, not drawn on this one
         std::vector<SRestore>  restore;
         Time::steady_tp        now;
     };
@@ -325,6 +337,64 @@ namespace Expanse::Render {
         }
     }
 
+    // Other monitors. A canvas reaches past its monitor's edges, over its
+    // neighbours': a window there is on another canvas, off its screen. It
+    // isn't drawn on the neighbour, and once it's off its own screen entirely
+    // it takes no clicks or pointer focus there either (keyboard focus still
+    // reaches it, and centres it).
+    constexpr uint32_t INPUT_BLOCK_PARKED = 1U << 7; // past Hyprland's own reasons
+
+    static bool onAnotherCanvas(const PHLWINDOW& window, const PHLMONITOR& monitor) {
+        if (!window->m_isMapped || !window->m_isFloating || window->m_pinned || window->m_monitorMovedFrom != -1 || !window->m_workspace ||
+            window->m_workspace->m_isSpecialWorkspace || !window->m_workspace->isVisible())
+            return false;
+        const auto OWN = window->m_monitor.lock();
+        if (!OWN || OWN == monitor)
+            return false;
+        // A window you're dragging between monitors shows wherever it is.
+        const auto DRAGGED = g_layoutManager->dragController()->target();
+        return !(DRAGGED && DRAGGED == window->layoutTarget());
+    }
+
+    static CBox realBox(const PHLWINDOW& window) {
+        return {window->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT), window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT)};
+    }
+
+    static void hideForeignWindows(const PHLMONITOR& monitor) {
+        if (g_canvas.paused())
+            return;
+        const CBox SCREEN = {monitor->m_position, monitor->m_size};
+        for (const auto& window : Desktop::windowState()->windows()) {
+            if (!window->isHidden() && onAnotherCanvas(window, monitor) && !realBox(window).intersection(SCREEN).empty()) {
+                setHiddenQuietly(window, true);
+                g_frame.foreign.push_back(window);
+            }
+        }
+    }
+
+    static void unhideForeignWindows() {
+        for (const auto& window : g_frame.foreign)
+            setHiddenQuietly(window, false);
+        g_frame.foreign.clear();
+    }
+
+    void updateParking(bool active) {
+        const auto& MONITORS = State::monitorState()->monitors();
+        for (const auto& window : Desktop::windowState()->windows()) {
+            bool       park = false;
+            const auto OWN  = window->m_monitor.lock();
+            if (active && OWN && !Fullscreen::controller()->isFullscreen(window)) {
+                const CBox BOX = realBox(window);
+                park           = BOX.intersection({OWN->m_position, OWN->m_size}).empty() &&
+                    std::ranges::any_of(MONITORS, [&](const PHLMONITOR& other) {
+                        return other && other != OWN && other->m_enabled && onAnotherCanvas(window, other) && !BOX.intersection({other->m_position, other->m_size}).empty();
+                    });
+            }
+            auto& reasons = window.get()->*robbed(SInputBlockTag{});
+            reasons       = park ? reasons | INPUT_BLOCK_PARKED : reasons & ~INPUT_BLOCK_PARKED;
+        }
+    }
+
     static void hideCanvasWindows(PHLMONITOR monitor) {
         if (!g_canvas.drawsOn(monitor) || monitor->m_activeWorkspace != g_canvas.workspace())
             return;
@@ -446,17 +516,23 @@ namespace Expanse::Render {
     void onStage(eRenderStage stage) {
         switch (stage) {
             case RENDER_BEGIN:
-                if (const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor.lock())
+                if (const auto MONITOR = g_pHyprRenderer->m_renderData.pMonitor.lock()) {
+                    hideForeignWindows(MONITOR);
                     hideCanvasWindows(MONITOR);
+                }
                 break;
             // Below the bar and other top layers, above the wallpaper.
             case RENDER_POST_WINDOWS: drawCanvas(); break;
             // A frame that skipped the workspace (no damage) still gets its
             // windows back.
-            case RENDER_LAST_MOMENT: unhideCanvasWindows(); break;
+            case RENDER_LAST_MOMENT:
+                unhideCanvasWindows();
+                unhideForeignWindows();
+                break;
             // The pass has drawn; the windows get their real geometry back.
             case RENDER_POST:
                 unhideCanvasWindows();
+                unhideForeignWindows();
                 restoreGeometry();
                 if (!g_canvas.live())
                     g_labels.clear();
@@ -466,6 +542,8 @@ namespace Expanse::Render {
     }
 
     void shutdown() {
+        updateParking(false);
+        unhideForeignWindows();
         unhideCanvasWindows();
         restoreGeometry();
         g_labels.clear();
