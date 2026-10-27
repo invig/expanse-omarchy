@@ -257,8 +257,14 @@ namespace Expanse {
                 // window already on screen looked like nothing happened.
                 const auto FOCUSED = Desktop::focusState()->window();
                 const bool HAS     = isCanvasWindow(FOCUSED);
+                // From a full-screen window, the way is measured from its spot on the canvas.
+                const bool FULLSCREEN = HAS && Fullscreen::controller()->isFullscreen(FOCUSED);
+                if (FULLSCREEN && !begin())
+                    return;
                 if (const auto NEXT = nearest(direction, HAS ? canvasBox(FOCUSED) : viewCentre(), HAS ? FOCUSED : nullptr))
                     glideTo(NEXT, true);
+                else if (FULLSCREEN)
+                    restoreFullscreen();
                 return;
             }
         }
