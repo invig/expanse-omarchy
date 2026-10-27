@@ -37,6 +37,8 @@ namespace Expanse {
     constexpr double CLOSE_SIZE         = 26.0;
     constexpr double CLOSE_INSET        = 10.0;
     constexpr double CLOSE_MIN_WIDTH    = 220.0; // narrower on screen, a window shows no ×
+    constexpr Vector2D MINIMAP_SIZE     = {208.0, 136.0};
+    constexpr double   MINIMAP_MARGIN   = 16.0;
 
     static double easeOutCubic(double t) {
         return 1.0 - std::pow(1.0 - t, 3.0);
@@ -726,6 +728,35 @@ namespace Expanse {
         return m_guides;
     }
 
+    CBox SMinimap::toScreen(const CBox& canvas) const {
+        return {offset.x + (canvas.x - bounds.x) * scale, offset.y + (canvas.y - bounds.y) * scale, std::max(canvas.w * scale, 1.0), std::max(canvas.h * scale, 1.0)};
+    }
+
+    Vector2D SMinimap::toCanvas(const Vector2D& screen) const {
+        return {(screen.x - offset.x) / scale + bounds.x, (screen.y - offset.y) / scale + bounds.y};
+    }
+
+    std::optional<SMinimap> CCanvas::minimap() const {
+        const auto MONITOR = monitor();
+        if (!MONITOR || !showsCanvas())
+            return std::nullopt;
+
+        SMinimap map;
+        map.box      = {MONITOR->m_position.x + MONITOR->m_size.x - MINIMAP_MARGIN - MINIMAP_SIZE.x, MONITOR->m_position.y + MONITOR->m_size.y - MINIMAP_MARGIN - MINIMAP_SIZE.y,
+                        MINIMAP_SIZE.x, MINIMAP_SIZE.y};
+        map.area     = {map.box.x + 10, map.box.y + 10, map.box.w - 20, map.box.h - 36};
+        map.viewport = viewInCanvas();
+        CBox bounds  = map.viewport;
+        for (const auto& window : canvasWindows()) {
+            map.windows.push_back(canvasBox(window));
+            bounds = unite(bounds, map.windows.back());
+        }
+        map.bounds = {bounds.x - bounds.w * 0.04, bounds.y - bounds.h * 0.04, bounds.w * 1.08, bounds.h * 1.08};
+        map.scale  = std::min(map.area.w / std::max(map.bounds.w, 1.0), map.area.h / std::max(map.bounds.h, 1.0));
+        map.offset = {map.area.x + (map.area.w - map.bounds.w * map.scale) / 2, map.area.y + (map.area.h - map.bounds.h * map.scale) / 2};
+        return map;
+    }
+
     std::vector<PHLWINDOW> CCanvas::canvasWindows() const {
         std::vector<PHLWINDOW> windows;
         for (const auto& window : Desktop::windowState()->windows()) {
@@ -842,6 +873,8 @@ namespace Expanse {
     }
 
     PHLWINDOW CCanvas::windowAt(const Vector2D& pos) const {
+        if (const auto MAP = minimap(); MAP && MAP->box.containsPoint(pos))
+            return nullptr;
         const auto WINDOWS = canvasWindows();
         for (const auto& window : WINDOWS | std::views::reverse) {
             if (screenBox(window).containsPoint(pos))

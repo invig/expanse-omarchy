@@ -23,6 +23,7 @@ Built and tested on Omarchy (Hyprland 0.56.2, aarch64) in [Try Omarchy](https://
 | <kbd>Return</kbd> · <kbd>Esc</kbd> | Dive into the highlighted window · clear the selection, then back to 100% |
 | Hover <kbd>×</kbd>, or <kbd>Super</kbd> + <kbd>W</kbd> | Close the hovered window, or every selected window at once |
 | <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>`</kbd> | Auto-centre on or off. Off: clicking a window that's partly on screen leaves the canvas where it is, for side-by-side work |
+| Click or drag on the minimap | Move the view there |
 | Right-click on the canvas | Back to 100% |
 
 The canvas is remembered in `~/.local/state/expanse/layout.json` (window titles only as a hash): reloading the plugin brings it back exactly, and a window an app opens again, after a restart too, returns to its spot. Unloading the plugin or pausing it puts every window back where it was before the canvas, tiled ones back into their layout; resuming brings the canvas back.

@@ -120,6 +120,10 @@ namespace Expanse {
                         moveWindow(WINDOW, box.pos() + shift);
                 break;
             }
+            case SDrag::DRAG_MINIMAP:
+                if (const auto MAP = minimap())
+                    centreOn(MAP->toCanvas(pos));
+                break;
             case SDrag::DRAG_MARQUEE: {
                 m_drag.moved   = true;
                 m_drag.last    = pos;
@@ -189,6 +193,14 @@ namespace Expanse {
         // A press stops the camera where it is.
         if (m_animating)
             setCamera(m_camera);
+
+        // On the minimap: the view centres there, and follows a drag.
+        if (const auto MAP = minimap(); MAP && MAP->box.containsPoint(POS)) {
+            m_drag = {.kind = SDrag::DRAG_MINIMAP, .start = POS, .last = POS};
+            if (MAP->area.copy().expand(4).containsPoint(POS))
+                centreOn(MAP->toCanvas(POS));
+            return true;
+        }
 
         const bool SHIFT  = mods() & HL_MODIFIER_SHIFT;
         const auto WINDOW = windowAt(POS);

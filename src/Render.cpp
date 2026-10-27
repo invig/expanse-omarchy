@@ -13,6 +13,7 @@
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 
 #include <cctype>
+#include <format>
 #include <cmath>
 #include <unordered_map>
 
@@ -192,6 +193,28 @@ namespace Expanse::Render {
                 GUIDE);
     }
 
+    static SText g_zoomText;
+
+    // As on the Mac: a dark panel, windows as light blocks, the view outlined,
+    // the zoom underneath.
+    static void addMinimap(const PHLMONITOR& monitor, const SMinimap& map, double scale) {
+        const double S    = monitor->m_scale;
+        const int    LINE = std::max(1, sc<int>(std::round(S)));
+        const CBox   BOX  = toPixels(map.box, monitor);
+        addRect(BOX, CHyprColor{0.12F, 0.12F, 0.12F, 0.88F}, std::round(12 * S));
+        addBorder(BOX.copy().expand(-LINE), CHyprColor{1.F, 1.F, 1.F, 0.08F}, LINE, std::round(12 * S) - LINE);
+
+        for (const auto& window : map.windows)
+            addRect(toPixels(map.toScreen(window), monitor), CHyprColor{0.85F, 0.85F, 0.85F, 0.75F}, std::round(1.5 * S));
+
+        const CBox VIEW = toPixels(map.toScreen(map.viewport), monitor);
+        addRect(VIEW, CHyprColor{1.F, 1.F, 1.F, 0.06F}, std::round(2 * S));
+        addBorder(VIEW.copy().expand(-LINE), CHyprColor{1.F, 1.F, 1.F, 0.9F}, LINE, std::round(2 * S));
+
+        if (refresh(g_zoomText, std::format("{}%", sc<int>(std::round(scale * 100))), std::round(10 * S), 0, CHyprColor{1.F, 1.F, 1.F, 0.7F}, false))
+            addTexture(g_zoomText.tex, Vector2D{BOX.x + 10 * S, BOX.y + BOX.h - 7 * S - g_zoomText.tex->m_size.y}.round());
+    }
+
     static void hideCanvasWindows(PHLMONITOR monitor) {
         if (!g_canvas.drawsOn(monitor) || monitor->m_activeWorkspace != g_canvas.workspace())
             return;
@@ -242,6 +265,7 @@ namespace Expanse::Render {
         const auto SELECTIONBOUNDS = g_canvas.selectionBounds();
         const auto GUIDES          = g_canvas.guides();
         const auto MARQUEE         = g_canvas.marquee();
+        const auto MINIMAP         = g_canvas.minimap();
         const bool DECORATED       = g_canvas.showsCanvas();
 
         const float DIM = DIM_ALPHA * sc<float>(g_canvas.zoomedOut());
@@ -292,6 +316,9 @@ namespace Expanse::Render {
             addRect(PIXELS, ACCENT.modifyA(0.12F));
             addBorder(PIXELS, ACCENT, std::max(1, sc<int>(std::round(MONITOR->m_scale))), 0);
         }
+
+        if (MINIMAP)
+            addMinimap(MONITOR, *MINIMAP, g_canvas.scale());
     }
 
     void onStage(eRenderStage stage) {
@@ -321,5 +348,6 @@ namespace Expanse::Render {
         restoreGeometry();
         g_labels.clear();
         g_closeGlyph = {};
+        g_zoomText   = {};
     }
 }

@@ -35,6 +35,21 @@ namespace Expanse {
 
     std::optional<eDirection> parseDirection(const std::string& text);
 
+    // The bottom-right overview on the canvas: every window as a block, the
+    // view as an outline, the zoom. Screen boxes are global logical.
+    struct SMinimap {
+        CBox              box;      // the panel
+        CBox              area;     // where the map is drawn inside it
+        CBox              bounds;   // the canvas region it shows
+        double            scale = 1;
+        Vector2D          offset;
+        std::vector<CBox> windows;  // canvas
+        CBox              viewport; // canvas
+
+        CBox              toScreen(const CBox& canvas) const;
+        Vector2D          toCanvas(const Vector2D& screen) const;
+    };
+
     class CCanvas {
       public:
         enum eState : uint8_t {
@@ -104,6 +119,7 @@ namespace Expanse {
         std::optional<CBox>    selectionBounds() const; // canvas, with more than one selected
         std::optional<CBox>    marquee() const;         // global logical
         const std::vector<Arrange::SGuide>& guides() const; // canvas
+        std::optional<SMinimap> minimap() const;              // while the canvas is up
 
         std::vector<PHLWINDOW> canvasWindows() const; // bottom to top
         CBox                   screenBox(PHLWINDOW window) const; // global logical, through the camera
@@ -194,6 +210,7 @@ namespace Expanse {
                 DRAG_PAN,
                 DRAG_WINDOW,  // one window, or the selection it's part of
                 DRAG_MARQUEE, // selecting with a box
+                DRAG_MINIMAP, // the view follows the pointer on the minimap
             } kind = DRAG_NONE;
             Vector2D                  start; // pointer, global logical
             Vector2D                  last;
