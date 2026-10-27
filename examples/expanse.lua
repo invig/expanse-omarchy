@@ -26,6 +26,9 @@ hl.window_rule({ name = "expanse-canvas", match = { modal = false }, float = tru
 -- "bottom_left", "bottom_right" or "off".
 -- hl.config({ plugin = { expanse = { hot_corner = "bottom" } } })
 
+-- The canvas on a plain background instead of the dimmed desktop picture.
+-- hl.config({ plugin = { expanse = { wallpaper = false } } })
+
 -- ALT + ` zooms out to every window and back, as on the Mac.
 bind("ALT + grave", "Zoom out to every window", hl.plugin.expanse.overview())
 

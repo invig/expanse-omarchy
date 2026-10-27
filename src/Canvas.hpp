@@ -7,6 +7,7 @@
 
 #include <hyprland/src/desktop/DesktopTypes.hpp>
 #include <hyprland/src/devices/IPointer.hpp>
+#include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprutils/math/Box.hpp>
 
 #include <chrono>
@@ -36,6 +37,7 @@ namespace Expanse {
     constexpr double OVERVIEW_MAX_SCALE = 0.6; // zoomed out, windows are never drawn bigger than this
 
     std::optional<eDirection> parseDirection(const std::string& text);
+    std::string               appName(const PHLWINDOW& window); // "org.gnome.Nautilus" → "Nautilus"
 
     // The bottom-right overview on the canvas: every window as a block, the
     // view as an outline, the zoom. Screen boxes are global logical.
@@ -187,6 +189,8 @@ namespace Expanse {
         void                   cameraMovedByUser();
         void                   damage() const;
         void                   floatTiledWindows();
+        void                   leaveFullscreen();
+        void                   restoreFullscreen();
         void                   moveWindow(PHLWINDOW window, const Vector2D& canvasPos);
         void                   raise(PHLWINDOW window);
         void                   placeNewWindow(PHLWINDOW window, PHLWINDOW anchor);
@@ -222,7 +226,8 @@ namespace Expanse {
         PHLWORKSPACEREF        m_workspace;
         PHLWINDOWREF           m_hover;
         PHLWINDOWREF           m_target;
-        PHLWORKSPACEREF        m_hoverSpace; // the workspaces bar tile under the pointer
+        PHLWORKSPACEREF        m_hoverSpace;    // the workspaces bar tile under the pointer
+        PHLWINDOWREF           m_offscreenHint; // the last window we said was off-screen
 
         eState                 m_state        = STATE_IDLE;
         bool                   m_animating    = false;
@@ -251,6 +256,15 @@ namespace Expanse {
         wl_event_source*            m_saveTimer = nullptr;
 
         std::vector<PHLWINDOWREF> m_selected;
+
+        // A full-screen window leaves full screen while the canvas is up
+        // (Hyprland hides everything under it), and gets it back if you leave
+        // without picking another window, as a full-screen app on the Mac.
+        struct {
+            PHLWINDOWREF                window;
+            Fullscreen::SFullscreenMode mode;
+            bool                        layoutAware = false; // which of Hyprland's handlers had it
+        } m_fullscreen;
 
         struct SDrag {
             enum eKind : uint8_t {

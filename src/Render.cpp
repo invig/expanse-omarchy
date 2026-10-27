@@ -3,6 +3,7 @@
 #include "Render.hpp"
 #include "Canvas.hpp"
 
+#include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/output/Monitor.hpp>
@@ -12,7 +13,6 @@
 #include <hyprland/src/render/pass/RectPassElement.hpp>
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 
-#include <cctype>
 #include <format>
 #include <cmath>
 #include <unordered_map>
@@ -71,6 +71,8 @@ namespace Expanse::Render {
     static const CHyprColor CLOSE_FILL   = {0.1F, 0.1F, 0.1F, 0.75F};
     static const CHyprColor LABEL        = {1.F, 1.F, 1.F, 0.95F};
     static const CHyprColor LABEL_SHADOW = {0.F, 0.F, 0.F, 0.7F};
+    static const CHyprColor LABEL_QUIET  = {0.75F, 0.75F, 0.75F, 0.9F};
+    static const CHyprColor PLAIN_BACKGROUND = {0.13F, 0.13F, 0.13F, 1.F}; // the canvas without the desktop picture
     constexpr float         DIM_ALPHA    = 0.45F;
     constexpr double        LABEL_PT     = 11.0;
     constexpr double        LABEL_GAP    = 5.0;
@@ -147,17 +149,7 @@ namespace Expanse::Render {
         return cached.tex != nullptr;
     }
 
-    // "org.gnome.Nautilus" → "Nautilus", "foot" → "Foot".
-    static std::string appName(const PHLWINDOW& window) {
-        std::string name = window->m_class;
-        if (const auto DOT = name.rfind('.'); DOT != std::string::npos && DOT + 1 < name.size())
-            name = name.substr(DOT + 1);
-        if (!name.empty())
-            name[0] = std::toupper(sc<unsigned char>(name[0]));
-        return name.empty() ? window->m_title : name;
-    }
-
-    static void addLabel(const PHLMONITOR& monitor, const PHLWINDOW& window, const CBox& screen, bool hovered) {
+    static void addLabel(const PHLMONITOR& monitor, const PHLWINDOW& window, const CBox& screen, bool hovered, bool plain) {
         if (screen.w < LABEL_MIN)
             return;
         const std::string NAME = appName(window);
@@ -166,12 +158,14 @@ namespace Expanse::Render {
         const int WIDTH = std::max(sc<int>(std::floor(std::max((screen.w - 4) * monitor->m_scale, 60.0) / 32.0)) * 32, 60);
         const int PX    = std::round(LABEL_PT * monitor->m_scale);
 
+        // White with a shadow over the desktop picture; quiet grey over the plain background.
         auto& cached = g_labels[window.get()];
-        if (!refresh(cached, TEXT, PX, WIDTH, LABEL, true))
+        if (!refresh(cached, TEXT, PX, WIDTH, plain ? LABEL_QUIET : LABEL, !plain))
             return;
         const CBox     PIXELS = toPixels(screen, monitor);
         const Vector2D AT     = {PIXELS.x + 2 * monitor->m_scale, PIXELS.y + PIXELS.h + LABEL_GAP * monitor->m_scale};
-        addTexture(cached.shadow, AT + Vector2D{0.0, sc<double>(monitor->m_scale)});
+        if (cached.shadow)
+            addTexture(cached.shadow, AT + Vector2D{0.0, sc<double>(monitor->m_scale)});
         addTexture(cached.tex, AT);
     }
 
@@ -305,9 +299,18 @@ namespace Expanse::Render {
         const auto SPACESBAR       = g_canvas.spacesBar();
         const bool DECORATED       = g_canvas.showsCanvas();
 
-        const float DIM = DIM_ALPHA * sc<float>(g_canvas.zoomedOut());
-        if (DIM > 0.F)
-            addRect({0, 0, MONITOR->m_transformedSize.x, MONITOR->m_transformedSize.y}, CHyprColor{0.F, 0.F, 0.F, DIM});
+        // Over the desktop picture, dimmed; or, with it turned off, a plain
+        // background (as Expanse's "Desktop Picture Background" menu item).
+        static auto PWALLPAPER = CConfigValue<Config::BOOL>("plugin:expanse:wallpaper");
+        static bool plainLabels = false;
+        const bool  PLAIN       = !*PWALLPAPER;
+        if (PLAIN != plainLabels) {
+            g_labels.clear();
+            plainLabels = PLAIN;
+        }
+        const float SHOWN = sc<float>(g_canvas.zoomedOut());
+        if (SHOWN > 0.F)
+            addRect({0, 0, MONITOR->m_transformedSize.x, MONITOR->m_transformedSize.y}, PLAIN ? PLAIN_BACKGROUND.modifyA(SHOWN) : CHyprColor{0.F, 0.F, 0.F, DIM_ALPHA * SHOWN});
 
         for (size_t i = 0; i < WINDOWS.size(); ++i) {
             const auto& window = WINDOWS[i];
@@ -334,7 +337,7 @@ namespace Expanse::Render {
             }
             if (closes[i])
                 addCloseButton(MONITOR, screens[i]);
-            addLabel(MONITOR, window, screens[i], window == HOVER);
+            addLabel(MONITOR, window, screens[i], window == HOVER, PLAIN);
         }
 
         if (!DECORATED)

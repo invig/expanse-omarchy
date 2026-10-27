@@ -41,7 +41,9 @@ The nearest window that way is the one Expanse on the Mac picks: a window sharin
 
 <kbd>Super</kbd> + arrows take over from Omarchy's focus keys (Hyprland's `movefocus`), which do the same job on a canvas less well: they pick by angle between centres, never centre the window, and can't chain. Hyprland fires every bind on a key, so the example config unbinds those four first. Like `movefocus`, a hop lands with the pointer on the window (unless `cursor:no_warps`), so focus that follows the mouse stays put; a click-centre leaves the pointer where you clicked. <kbd>Ctrl</kbd> + arrows stay with apps for word-jump.
 
-Focus moved from the keyboard (Alt-Tab, other binds) also centres a window that isn't fully on screen. Focus that follows the mouse never moves the canvas.
+Focus moved from the keyboard (Alt-Tab, other binds) also centres a window that isn't fully on screen; with auto-centre off the canvas stays put and a notification says the window is off-screen. Focus that follows the mouse never moves the canvas.
+
+A full-screen (or maximised) window sits outside the canvas, as a full-screen app does on the Mac: zooming out takes it out of full screen, back to its spot among the others. Leave without picking a window, or pick it, and it goes back to full screen; pick another and it stays where it is on the canvas.
 
 ## How it works
 
@@ -69,10 +71,10 @@ dofile("/path/to/expanse-hypr/examples/expanse.lua")
 
 [examples/expanse.lua](examples/expanse.lua) floats every window from its first frame (a window rule; without it, a tiled window floats where it is when the canvas first touches it) and binds <kbd>Alt</kbd> + <kbd>`</kbd>, <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>`</kbd> and <kbd>Super</kbd> + arrows, with descriptions for Omarchy's key guide. `hl.plugin.expanse.overview()`, `hop("left")`, `tidy()` and `auto_centre()` return their actions, like `hl.dsp.*`, so they work in `hl.bind` and `hyprctl dispatch` alike.
 
-The hot corner is `plugin:expanse:hot_corner`: `bottom` (both bottom corners, the default, since Omarchy's bar has its menu top left), `all`, `top_left`, `top_right`, `bottom_left`, `bottom_right` or `off`:
+The hot corner is `plugin:expanse:hot_corner`: `bottom` (both bottom corners, the default, since Omarchy's bar has its menu top left), `all`, `top_left`, `top_right`, `bottom_left`, `bottom_right` or `off`. `plugin:expanse:wallpaper = false` puts the canvas on a plain background instead of the dimmed desktop picture:
 
 ```lua
-hl.config({ plugin = { expanse = { hot_corner = "all" } } })
+hl.config({ plugin = { expanse = { hot_corner = "all", wallpaper = false } } })
 ```
 
 `hyprpm` isn't installed on Omarchy; [hyprpm.toml](hyprpm.toml) is ready for when it is (`hyprpm add <this repo>`, `hyprpm enable expanse`).
@@ -81,7 +83,7 @@ Rebuild after every Hyprland update: plugins are tied to the exact Hyprland buil
 
 ## Scripting and tests
 
-`hyprctl expanse` prints the canvas as JSON. `hyprctl expanse` with `toggle`, `open`, `close`, `tidy`, `fit`, `zoom <scale>`, `pan <dx> <dy>`, `hop <left|right|up|down>`, `focus <app>`, `space <name>` (that workspace's canvas, zoomed out), `select all`, `restore` (every window back into view), `pause`, `resume`, `autocentre <on|off>` or, for debugging, `screen <w> <h>` (pretend the screen is that size; no size for the real one) drives it, and `pick <x> <y>` clicks the canvas at a global logical point. In Lua, `hl.plugin.expanse.pause()` toggles pausing and `restore()` brings windows back into view.
+`hyprctl expanse` prints the canvas as JSON. `hyprctl expanse` with `toggle`, `open`, `close`, `tidy`, `fit`, `zoom <scale>`, `pan <dx> <dy>`, `hop <left|right|up|down>`, `focus <app>` (or `focus address:0x…`, from `hyprctl clients`), `space <name>` (that workspace's canvas, zoomed out), `select all`, `restore` (every window back into view), `pause`, `resume`, `autocentre <on|off>` or, for debugging, `screen <w> <h>` (pretend the screen is that size; no size for the real one) drives it, and `pick <x> <y>` clicks the canvas at a global logical point. In Lua, `hl.plugin.expanse.pause()` toggles pausing and `restore()` brings windows back into view.
 
 `make test` checks the nearest-window rule and the layout file case by case. The nearest-window rule, snapping, tidy-up, free-space placement and the layout for a smaller screen were also checked against Expanse's own Swift on thousands of random layouts, with no differences.
 

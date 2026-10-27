@@ -16,6 +16,7 @@
 #include <hyprland/src/render/Renderer.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <format>
 #include <ranges>
@@ -103,6 +104,15 @@ namespace Expanse {
         }
     }
 
+    std::string appName(const PHLWINDOW& window) {
+        std::string name = window->m_class;
+        if (const auto DOT = name.rfind('.'); DOT != std::string::npos && DOT + 1 < name.size())
+            name = name.substr(DOT + 1);
+        if (!name.empty())
+            name[0] = std::toupper(sc<unsigned char>(name[0]));
+        return name.empty() ? window->m_title : name;
+    }
+
     std::optional<eDirection> parseDirection(const std::string& text) {
         if (text == "left" || text == "l")
             return DIRECTION_LEFT;
@@ -144,6 +154,7 @@ namespace Expanse {
         m_selected.clear();
         m_drag = {};
         m_guides.clear();
+        leaveFullscreen();
         floatTiledWindows();
         m_camera = homeCamera();
         return true;
@@ -420,8 +431,13 @@ namespace Expanse {
         m_guides.clear();
         m_selected.clear();
 
-        const auto TARGET = m_target.lock();
-        if (!TARGET || !TARGET->m_isMapped) {
+        const auto TARGET     = m_target.lock();
+        const auto FULLSCREEN = m_fullscreen.window.lock();
+        if ((!TARGET || !TARGET->m_isMapped || TARGET == FULLSCREEN) && FULLSCREEN && FULLSCREEN->m_isMapped) {
+            // Back to the full-screen window you zoomed out from.
+            Desktop::focusState()->fullWindowFocus(FULLSCREEN, Desktop::FOCUS_REASON_CLICK);
+            restoreFullscreen();
+        } else if (!TARGET || !TARGET->m_isMapped) {
             // Back without picking one: the focused window if it's in view,
             // else the top one that is.
             const auto FOCUSED = Desktop::focusState()->window();
@@ -443,6 +459,7 @@ namespace Expanse {
             raise(TARGET);
         }
 
+        m_fullscreen = {};
         m_target.reset();
         m_hover.reset();
         g_pHyprRenderer->damageMonitor(MONITOR);
@@ -470,6 +487,24 @@ namespace Expanse {
             g_layoutManager->setTargetGeom(box, target);
             target->warpPositionSize();
         }
+    }
+
+    void CCanvas::leaveFullscreen() {
+        const auto WORKSPACE = m_workspace.lock();
+        const auto WINDOW    = WORKSPACE ? Fullscreen::controller()->getFullscreenWindow(WORKSPACE) : nullptr;
+        if (!WINDOW)
+            return;
+        // Through the handler that has it, which put it there: that one knows the size and spot to go back to.
+        m_fullscreen = {WINDOW, Fullscreen::controller()->getFullscreenModes(WINDOW), Fullscreen::controller()->layoutManagedFS(WINDOW)};
+        Fullscreen::controller()->setFullscreenMode(WINDOW, Fullscreen::FSMODE_NONE, Fullscreen::FSMODE_NONE, m_fullscreen.layoutAware);
+    }
+
+    void CCanvas::restoreFullscreen() {
+        const auto WINDOW = m_fullscreen.window.lock();
+        const auto SAVED  = m_fullscreen;
+        m_fullscreen      = {};
+        if (WINDOW && WINDOW->m_isMapped && WINDOW->m_workspace == m_workspace.lock())
+            Fullscreen::controller()->setFullscreenMode(WINDOW, SAVED.mode.internal, SAVED.mode.client, SAVED.layoutAware);
     }
 
     PHLWINDOW CCanvas::topWindowInView(PHLWINDOW excluding) const {
@@ -915,6 +950,10 @@ namespace Expanse {
     }
 
     void CCanvas::reset() {
+        // Leaving any other way than picking a window: a full-screen window
+        // gets full screen back.
+        if (live())
+            restoreFullscreen();
         m_state     = STATE_IDLE;
         m_animating = false;
         m_target.reset();

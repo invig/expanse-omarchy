@@ -8,6 +8,7 @@
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/layout/target/Target.hpp>
+#include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 
 #include <wayland-server-core.h>
@@ -29,6 +30,12 @@ namespace Expanse {
         return {window->position(IGeometric::GEOMETRIC_GOAL), window->size(IGeometric::GEOMETRIC_GOAL)};
     }
 
+    // Full screen (or maximised), a window's box is the screen's, not a spot
+    // or size on the canvas: it keeps the ones it had.
+    static bool fullscreen(const PHLWINDOW& window) {
+        return Fullscreen::controller()->isFullscreen(window);
+    }
+
     CCanvas::STracked* CCanvas::tracked(const PHLWINDOW& window) {
         for (auto& entry : m_originals)
             if (entry.window.lock() == window)
@@ -41,7 +48,7 @@ namespace Expanse {
         // some window is smaller than its chosen size because this screen is.
         for (const auto& entry : m_originals) {
             const auto WINDOW = entry.window.lock();
-            if (!WINDOW)
+            if (!WINDOW || fullscreen(WINDOW))
                 continue;
             const auto SIZE = goalBox(WINDOW).size();
             if (SIZE.x < entry.preferred.x - 1 || SIZE.y < entry.preferred.y - 1)
@@ -54,7 +61,7 @@ namespace Expanse {
         // A size the canvas didn't make is the size you chose.
         for (auto& entry : m_originals) {
             const auto WINDOW = entry.window.lock();
-            if (!WINDOW)
+            if (!WINDOW || fullscreen(WINDOW))
                 continue;
             const auto SIZE = goalBox(WINDOW).size();
             const bool OURS = entry.lastSized && std::abs(entry.lastSized->x - SIZE.x) < 2 && std::abs(entry.lastSized->y - SIZE.y) < 2;
@@ -70,7 +77,7 @@ namespace Expanse {
         if (isDerived())
             return;
         for (auto& entry : m_originals)
-            if (const auto WINDOW = entry.window.lock(); WINDOW && WINDOW->m_workspace)
+            if (const auto WINDOW = entry.window.lock(); WINDOW && WINDOW->m_workspace && !fullscreen(WINDOW))
                 entry.home = goalBox(WINDOW).pos() + scrolledFor(WINDOW->m_workspace);
     }
 
@@ -121,7 +128,8 @@ namespace Expanse {
         // its size; on the big screen that's the home layout exactly. With
         // `tidy`, the home layout itself is cleaned up first (overlaps apart,
         // groups pulled to the standard gap).
-        const auto WINDOWS = canvasWindows();
+        auto WINDOWS = canvasWindows();
+        std::erase_if(WINDOWS, fullscreen);
         if (WINDOWS.empty())
             return;
         for (const auto& window : WINDOWS)

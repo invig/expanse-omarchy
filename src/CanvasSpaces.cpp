@@ -128,7 +128,7 @@ namespace Expanse {
         // has switched (onWorkspaceChanged), as it does for a workspace bind.
         g_pEventLoopManager->doLater([ref = PHLWORKSPACEREF{target}] {
             if (const auto WORKSPACE = ref.lock(); WORKSPACE && !WORKSPACE->inert())
-                Config::Actions::changeWorkspace(WORKSPACE);
+                (void)Config::Actions::changeWorkspace(WORKSPACE); // failing, the canvas stays where it is
         });
     }
 

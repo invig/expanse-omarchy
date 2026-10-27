@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
 
 // Pointer, keyboard, scroll and pinch on the canvas, as on the Mac.
 namespace Expanse {
@@ -429,7 +430,17 @@ namespace Expanse {
         if (m_paused || live() || reason == Desktop::FOCUS_REASON_FFM || reason == Desktop::FOCUS_REASON_CLICK)
             return;
 
-        if (isCanvasWindow(window) && !fullyVisible(window))
+        if (!isCanvasWindow(window) || fullyVisible(window))
+            return;
+        if (m_autoCentre) {
             glideLater(window, true);
+            return;
+        }
+        // Auto-centre off means the canvas stays put, even for a window
+        // entirely off screen; say where it went instead (once).
+        if (screenBox(window).intersection(usableArea()).empty() && m_offscreenHint.lock() != window) {
+            m_offscreenHint = window;
+            HyprlandAPI::addNotification(PHANDLE, std::format("{} is off-screen · Alt+` to find it", appName(window)), CHyprColor{0.54F, 0.71F, 0.98F, 1.F}, 3000);
+        }
     }
 }

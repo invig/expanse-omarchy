@@ -92,7 +92,9 @@ namespace Expanse {
         updateHome();
         for (const auto& original : m_originals) {
             const auto WINDOW = original.window.lock();
-            const CBox FRAME  = goalBox(WINDOW).translate(scrolledFor(WINDOW->m_workspace));
+            // Full screen, it's saved at its spot on the canvas.
+            const CBox FRAME = Fullscreen::controller()->isFullscreen(WINDOW) ? CBox{original.home, original.preferred} :
+                                                                                goalBox(WINDOW).translate(scrolledFor(WINDOW->m_workspace));
             layout.windows.push_back({
                 .app       = WINDOW->m_initialClass,
                 .title     = Store::titleKey(WINDOW->m_initialTitle),

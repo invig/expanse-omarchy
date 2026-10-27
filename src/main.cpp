@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include <hyprland/src/config/values/types/BoolValue.hpp>
 #include <hyprland/src/config/values/types/StringValue.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
@@ -118,16 +119,19 @@ static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
     else if (verb == "resume")
         g_canvas.resume();
     else if (verb == "focus") {
-        // The newest window whose app matches, as expanse://focus?app= on the Mac.
+        // The newest window whose app matches, as expanse://focus?app= on the
+        // Mac; or, as ?id=, one window by its address (from hyprctl clients).
         std::string app;
         std::getline(words >> std::ws, app);
+        const bool ADDRESS = app.starts_with("address:");
         const auto LOWER = [](std::string text) {
             std::ranges::transform(text, text.begin(), [](unsigned char c) { return std::tolower(c); });
             return text;
         };
         PHLWINDOW match;
         for (const auto& window : g_canvas.canvasWindows())
-            if (!app.empty() && (LOWER(window->m_class).contains(LOWER(app)) || LOWER(window->m_initialClass).contains(LOWER(app))))
+            if (ADDRESS ? app == std::format("address:0x{:x}", reinterpret_cast<uintptr_t>(window.get())) :
+                          !app.empty() && (LOWER(window->m_class).contains(LOWER(app)) || LOWER(window->m_initialClass).contains(LOWER(app))))
                 match = window;
         if (!match)
             return std::format("no window of {} on this canvas\n", app);
@@ -212,6 +216,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             info.cancelled = true;
     };
 
+    HyprlandAPI::addConfigValueV2(PHANDLE,
+                                  makeShared<Config::Values::CBoolValue>("plugin:expanse:wallpaper", "the desktop picture behind the canvas; off: a plain background",
+                                                                         Config::BOOL{true}));
     HyprlandAPI::addConfigValueV2(PHANDLE,
                                   makeShared<Config::Values::CStringValue>("plugin:expanse:hot_corner",
                                                                            "rest the pointer here to zoom out: off, all, bottom, top_left, top_right, bottom_left or bottom_right",
