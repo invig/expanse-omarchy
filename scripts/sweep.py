@@ -9,9 +9,11 @@ It opens its own windows on an empty workspace and closes them at the end.
 Each check prints PASS or FAIL; the exit status is the number that failed.
 """
 
+import atexit
 import glob
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -25,7 +27,10 @@ ENV = ("export XDG_RUNTIME_DIR=/run/user/$(id -u) WAYLAND_DISPLAY=wayland-1; "
 QMP = sorted(glob.glob("/tmp/omarchy-qemu-gpu.*/qmp.sock"))[-1]
 RUN = str(int(time.time()))[-5:]
 APPS = [f"sweep-{name}-{RUN}" for name in ("a", "b", "c")]
-WORKSPACE = "7"
+# Its workspace is the one Super + 7 goes to on the test monitor, and the
+# other one Super + 8's: Omarchy gives each monitor workspaces of its own
+# (41-50 for this one, say), and renames others to fit.
+WORKSPACE_KEY, OTHER_KEY = "7", "8"
 failed = []
 
 
@@ -52,6 +57,36 @@ def layout():
     return round(width), round(height)
 
 
+# A run cut short leaves its windows behind: they'd keep workspace 7 on
+# whichever monitor it was on.
+for c in json.loads(vm("hyprctl clients -j")):
+    if c["class"].startswith(("sweep-", "org.expanse.Sweep")):
+        vm(f"kill {c['pid']}")
+
+# The sweep runs on a monitor of its own. Virtual-1 follows the VM's window
+# on the Mac (moving or resizing that changes the screen mid-run); a headless
+# output doesn't. Both are pinned, Virtual-1 at 0, 0 and the test monitor
+# below it, so the layout's extent, and the pointer's mapping onto it, stay
+# put. The rules are in scripts/sweep-monitors.lua, which the VM's config runs
+# (added here if it isn't yet): loading the plugin reloads the config.
+MON = "SWEEP-MAIN"
+RULES = "/home/test/expanse-hypr/scripts/sweep-monitors.lua"
+CONFIG = "~/.config/hypr/hyprland.lua"
+vm(f"grep -qF {shlex.quote(RULES)} {CONFIG} || printf %s {shlex.quote(chr(10) + '-- scripts/sweep.py: its test monitor' + chr(10) + f'dofile("{RULES}")' + chr(10))} >> {CONFIG}")
+vm("hyprctl reload")
+time.sleep(1.5)
+vm(f"hyprctl output create headless {MON}")
+time.sleep(3)
+# However the run ends: the test monitor goes, and Virtual-1's own rule comes back.
+atexit.register(lambda: (vm(f"hyprctl output remove {MON}"), time.sleep(1), vm("hyprctl reload")))
+
+
+def test_monitor():
+    return next(m for m in json.loads(vm("hyprctl monitors -j")) if m["name"] == MON)
+
+
+_m = test_monitor()
+OX, OY, MW, MH = _m["x"], _m["y"], _m["width"] / _m["scale"], _m["height"] / _m["scale"]
 W, H = layout()
 
 
@@ -94,16 +129,15 @@ SCREENS = {}
 
 
 def screen_size():
-    return tuple((m["name"], m["width"], m["height"]) for m in json.loads(vm("hyprctl monitors -j")) if m["name"] == "Virtual-1")
+    return tuple((m["name"], m["x"], m["y"], m["width"], m["height"]) for m in json.loads(vm("hyprctl monitors -j")) if m["name"] == MON)
 
 
 def check(name, ok, detail=""):
-    # The VM's screen follows its window on the Mac: if that changed size
-    # mid-run, the canvas rightly moved everything, and what follows can't be
-    # compared. Say so, and stop.
+    # If the test monitor changed mid-run, the canvas rightly moved
+    # everything, and what follows can't be compared. Say so, and stop.
     size = screen_size()
     if SCREENS.setdefault("start", size) != size:
-        print(f"STOP  the VM's screen changed size during the run ({SCREENS['start']} -> {size}): leave its window alone and run again")
+        print(f"STOP  the test monitor changed during the run ({SCREENS['start']} -> {size}): run again")
         sys.exit(100)
     print(f"{'PASS' if ok else 'FAIL'}  {name}{'  (' + detail + ')' if detail and not ok else ''}")
     if not ok:
@@ -145,15 +179,24 @@ def real():
 
 
 def screen_middle():
-    usable = json.loads(vm("hyprctl monitors -j"))[0]
+    usable = test_monitor()
     left, top, right, bottom = usable["reserved"]
     w, h = usable["width"] / usable["scale"], usable["height"] / usable["scale"]
     return usable["x"] + left + (w - left - right) / 2, usable["y"] + top + (h - top - bottom) / 2
 
 
-# --- Setup: three windows of apps with no saved spots, on an empty workspace.
-vm(f'hyprctl dispatch "hl.dsp.focus({{ workspace = {WORKSPACE} }})"')
+# --- Setup: three windows of apps with no saved spots, on an empty workspace
+# on the test monitor. The canvas at 100% to begin with (it may have been left
+# zoomed out or paused).
+ctl("resume")
+if ctl()["state"] != "idle":
+    vm("hyprctl expanse close")
+    settle()
+point(OX + MW / 2, OY + MH / 2)
+vm(f'hyprctl dispatch "hl.dsp.focus({{ monitor = \\"{MON}\\" }})"')
+qmp("key", f"meta_l+{WORKSPACE_KEY}")
 wait(1)
+WORKSPACE = test_monitor()["activeWorkspace"]["name"]
 for app, size in zip(APPS, ("900 560", "800 500", "700 440")):
     vm(f'hyprctl dispatch "hl.dsp.exec_cmd(\\"foot --app-id={app} sleep infinity\\", {{ float = true, size = \\"{size}\\" }})"')
     wait(2.2)
@@ -168,19 +211,19 @@ qmp("key", "alt+grave_accent")
 wait()
 s = ctl()
 check("Alt + ` zooms out to every window", s["state"] == "overview" and s["scale"] < 1, f"{s['state']} {s['scale']}")
-check("zoomed out, every window is on screen", all(0 <= w["screen"][0] and w["screen"][0] + w["screen"][2] <= W for w in mine(s).values()))
+check("zoomed out, every window is on screen", all(OX <= w["screen"][0] and w["screen"][0] + w["screen"][2] <= OX + MW for w in mine(s).values()))
 qmp("key", "alt+grave_accent")
 check("Alt + ` again goes back to 100%", settle())
 check("going back without picking leaves every window where it was", real() == before, f"{before} -> {real()}")
 
 # --- Hot corner (bottom corners by default).
-point(W / 2, H / 2)
-qmp("move", 1, H - 1, W, H, "sleep", 80, "move", 0, H, W, H, "sleep", 900)
+point(OX + MW / 2, OY + MH / 2)
+qmp("move", OX + 1, OY + MH - 1, W, H, "sleep", 80, "move", OX, OY + MH, W, H, "sleep", 900)
 check("resting in a bottom corner zooms out", ctl()["state"] == "overview")
-point(W / 2, H / 2)
-qmp("move", 1, H - 1, W, H, "sleep", 80, "move", 0, H, W, H, "sleep", 900)
+point(OX + MW / 2, OY + MH / 2)
+qmp("move", OX + 1, OY + MH - 1, W, H, "sleep", 80, "move", OX, OY + MH, W, H, "sleep", 900)
 check("the corner again zooms back in", settle())
-point(W / 2, H / 2)
+point(OX + MW / 2, OY + MH / 2)
 
 # --- Click a window to glide to it, centred and focused.
 zoom_out()
@@ -221,10 +264,10 @@ check("= zooms in", ctl()["scale"] > s1, str(ctl()["scale"]))
 qmp("key", "0")
 wait()
 fit = ctl()
-check("0 fits everything", all(0 <= w["screen"][0] and w["screen"][0] + w["screen"][2] <= W for w in mine(fit).values()))
+check("0 fits everything", all(OX <= w["screen"][0] and w["screen"][0] + w["screen"][2] <= OX + MW for w in mine(fit).values()))
 
 # --- Super + scroll zooms around the pointer; scroll pans.
-point(W * 0.3, H * 0.6)
+point(OX + MW * 0.3, OY + MH * 0.6)
 before = ctl()
 qmp("hold", "meta_l", "wheel", "up", 5, "let", "meta_l", "sleep", 500)
 after = ctl()
@@ -283,7 +326,7 @@ check("then Esc goes back to 100%", settle())
 # --- Minimap: a click moves the view there.
 zoom_out()
 before = ctl()["origin"]
-point(W - 16 - 208 + 30, H - 16 - 136 + 30)
+point(OX + MW - 16 - 208 + 30, OY + MH - 16 - 136 + 30)
 qmp("click")
 wait()
 check("clicking the minimap moves the view", ctl()["origin"] != before)
@@ -318,8 +361,8 @@ settle()
 # --- Scrolling on the empty desktop starts moving around the canvas at 100%.
 state = ctl()
 empty = None
-for x in range(100, W - 300, 150):
-    for y in range(150, H - 300, 150):
+for x in range(int(OX) + 100, int(OX + MW) - 300, 150):
+    for y in range(int(OY) + 150, int(OY + MH) - 300, 150):
         if not any(w["screen"][0] - 20 <= x <= w["screen"][0] + w["screen"][2] + 20 and w["screen"][1] - 20 <= y <= w["screen"][1] + w["screen"][3] + 20
                    for w in state["windows"]):
             empty = (x, y)
@@ -373,7 +416,7 @@ qmp("key", "esc")
 settle()
 ctl("restore")
 wait(1.5)
-usable_ok = all(0 <= b[0] and b[0] + b[2] <= W and 0 <= b[1] and b[1] + b[3] <= H for b in real().values())
+usable_ok = all(OX <= b[0] and b[0] + b[2] <= OX + MW and OY <= b[1] and b[1] + b[3] <= OY + MH for b in real().values())
 check("restore brings every window into view", usable_ok, f"{real()}")
 
 # --- Scripting.
@@ -452,8 +495,8 @@ def canvas_of(app):
 
 
 def empty_spot(state, avoid_corner=True):
-    for x in range(80, W - 400, 60):
-        for y in range(120, H - 320, 60):
+    for x in range(int(OX) + 80, int(OX + MW) - 400, 60):
+        for y in range(int(OY) + 120, int(OY + MH) - 320, 60):
             if not any(inside((x, y), w["screen"], 30) for w in state["windows"]):
                 return x, y
     return None
@@ -511,9 +554,9 @@ check("a hop pressed mid-glide hops on from where the glide is heading", active(
 
 # Focus that follows the mouse never moves the canvas; a click centres; the pointer stays put.
 r = real()
-move_by(B, W - 260 - r[B][0], 0)
+move_by(B, OX + MW - 260 - r[B][0], 0)
 before = real()
-peek = (W - 120, centre(before[B])[1])
+peek = (OX + MW - 120, centre(before[B])[1])
 point(*peek)
 wait(1.5)
 check("focus that follows the mouse never moves the canvas", real() == before and ctl()["state"] == "idle")
@@ -523,9 +566,9 @@ check("clicking a window partly off screen centres it", centred(real()[B]), f"{r
 check("and leaves the pointer where you clicked", abs(cursor()[0] - peek[0]) <= 2 and abs(cursor()[1] - peek[1]) <= 2, f"{cursor()} vs {peek}")
 
 # Keyboard focus centres a window that isn't fully on screen; with auto-centre off it doesn't.
-point(W / 2, H / 2)
+point(OX + MW / 2, OY + MH / 2)
 r = real()
-move_by(D, W - 200 - r[D][0], 0)
+move_by(D, OX + MW - 200 - r[D][0], 0)
 focus(A)
 settle()
 focus(D)
@@ -533,7 +576,7 @@ settle()
 check("keyboard focus centres a window that isn't fully on screen", centred(real()[D]), f"{real()[D]}")
 ctl("autocentre off")
 r = real()
-move_by(D, W - 200 - r[D][0], 0)
+move_by(D, OX + MW - 200 - r[D][0], 0)
 focus(A)
 wait(1)
 before = real()
@@ -556,11 +599,11 @@ settle()
 
 # The hot corner can be turned off.
 ctl("corner off")
-point(W / 2, H / 2)
-qmp("move", 1, H - 1, W, H, "sleep", 80, "move", 0, H, W, H, "sleep", 900)
+point(OX + MW / 2, OY + MH / 2)
+qmp("move", OX + 1, OY + MH - 1, W, H, "sleep", 80, "move", OX, OY + MH, W, H, "sleep", 900)
 check("hot corner off: resting in a corner does nothing", ctl()["state"] == "idle")
 ctl("corner default")
-point(W / 2, H / 2)
+point(OX + MW / 2, OY + MH / 2)
 
 # Full screen: pick another window and it stays where it is.
 focus(A)
@@ -575,18 +618,18 @@ wait(1)
 check("picking another window leaves a full-screen one where it is on the canvas", fs() == 0 and active() == B, f"{fs()} {active()}")
 
 # The workspaces bar, and following a workspace bind while zoomed out.
-other = str(int(WORKSPACE) + 1)
+other = str(int(WORKSPACE) + int(OTHER_KEY) - int(WORKSPACE_KEY))
 open_app(E, "700 440", other)
 zoom_out()
 tiles = {t["name"]: t["tile"] for t in ctl()["spaces"]}
-tile = tiles.get(f"Workspace {other}")
+tile = tiles.get(f"Workspace {OTHER_KEY}")
 if tile:
     point(tile[0] + tile[2] / 2, tile[1] + tile[3] / 2)
     qmp("click")
     wait(2.5)
 s = ctl()
 check("clicking a workspace tile goes to its canvas, still zoomed out", bool(tile) and s["workspace"] == other and s["state"] == "overview", f"{s['workspace']} {s['state']} {list(tiles)}")
-qmp("key", f"meta_l+{WORKSPACE}")
+qmp("key", f"meta_l+{WORKSPACE_KEY}")
 wait(2.5)
 s = ctl()
 check("a workspace bind while zoomed out brings the canvas along", s["workspace"] == WORKSPACE and s["state"] == "overview", f"{s['workspace']} {s['state']}")
@@ -599,8 +642,8 @@ wait(2.5)
 open_app(F, "700 440")
 settle()
 f = real().get(F, [0, 0, 0, 0])
-area = json.loads(vm("hyprctl monitors -j"))[0]
-check("a new window opened off screen is glided to", 0 <= f[0] and f[0] + f[2] <= 900 and area["reserved"][1] <= f[1] and f[1] + f[3] <= area["reserved"][1] + 600, f"{f}")
+top = OY + test_monitor()["reserved"][1]
+check("a new window opened off screen is glided to", OX <= f[0] and f[0] + f[2] <= OX + 900 and top <= f[1] and f[1] + f[3] <= top + 600, f"{f}")
 ctl("screen")
 wait(2.5)
 
@@ -631,7 +674,7 @@ POPUP = f"org.expanse.SweepPopup{RUN}"
 def view_centre(state):
     # The canvas point in the middle of the usable screen.
     middle = screen_middle()
-    monitor = json.loads(vm("hyprctl monitors -j"))[0]
+    monitor = test_monitor()
     return (state["origin"][0] + (middle[0] - monitor["x"]) / state["scale"], state["origin"][1] + (middle[1] - monitor["y"]) / state["scale"])
 
 
@@ -723,7 +766,7 @@ check("Super + A selects every window", all(v["selected"] for v in mine().values
 qmp("key", "esc", "sleep", 400)
 
 # Minimap drag; right-click goes back to 100%.
-m = ctl()["minimap"] or [W - 224, H - 152, 208, 136]
+m = ctl()["minimap"] or [OX + MW - 224, OY + MH - 152, 208, 136]
 start = (m[0] + 40, m[1] + 40)
 point(*start)
 qmp("press", "sleep", 200)
@@ -740,9 +783,9 @@ check("right-click on the canvas goes back to 100%", settle())
 # Auto-centre off: clicking a window partly on screen leaves the canvas where it is.
 ctl("autocentre off")
 r = real()
-move_by(B, W - 260 - r[B][0], 0)
+move_by(B, OX + MW - 260 - r[B][0], 0)
 before = real()
-point(W - 120, centre(before[B])[1])
+point(OX + MW - 120, centre(before[B])[1])
 qmp("click", "sleep", 1500)
 check("auto-centre off: clicking a window partly on screen leaves the canvas where it is", real() == before and active() == B)
 # ...and keyboard focus to a window entirely off screen says so.
@@ -786,8 +829,8 @@ vm(f"kill {client(T1)['pid']}")
 
 # A window too big for the screen shrinks to fit as you go to it, and grows back on a bigger one.
 # Sizes relative to the screen: the VM's follows its window on the Mac.
-big = (int(W * 0.6), int(H * 0.6))
-tight = (int(W * 0.45), int(H * 0.45))
+big = (int(MW * 0.6), int(MH * 0.6))
+tight = (int(MW * 0.45), int(MH * 0.45))
 open_app(BIG, f"{big[0]} {big[1]}")
 chosen = real()[BIG][2:]
 ctl(f"screen {tight[0]} {tight[1]}")
@@ -804,13 +847,13 @@ check("and grows back on the big screen", real()[BIG][2:] == chosen, f"{real()[B
 before = real()
 zoom_out()
 tiles = {t["name"]: t["tile"] for t in ctl()["spaces"]}
-tile = tiles[f"Workspace {other}"]
+tile = tiles[f"Workspace {OTHER_KEY}"]
 point(tile[0] + tile[2] / 2, tile[1] + tile[3] / 2)
 qmp("click", "sleep", 2500)
 check("leaving a workspace from the canvas leaves its windows where they were", {k: v for k, v in real().items() if k in before} == before)
 qmp("key", "esc")
 settle()
-qmp("key", f"meta_l+{WORKSPACE}", "sleep", 2000)
+qmp("key", f"meta_l+{WORKSPACE_KEY}", "sleep", 2000)
 settle()
 
 # Placement on a workspace that isn't showing, mid-glide, and while zoomed out.
@@ -864,7 +907,7 @@ binds = json.loads(vm("hyprctl binds -j"))
 check("Super + arrows have one bind each (Omarchy's movefocus ones unbound)",
       all(sum(1 for b in binds if b["modmask"] == 64 and b["key"].lower() == key) == 1 for key in ("left", "right", "up", "down")))
 vm('hyprctl eval "hl.config({ cursor = { no_warps = true } })"')
-point(W / 2, H / 2 + 200)
+point(OX + MW / 2, OY + MH / 2 + 200)
 here = cursor()
 qmp("key", "meta_l+left")
 settle()
@@ -885,7 +928,7 @@ settle()
 vm("hyprctl output remove SWEEP-3")
 wait(2)
 W, H = layout()
-point(W / 2, H / 2)
+point(OX + MW / 2, OY + MH / 2)
 
 # Drawn as Expanse draws them: each window's border, and a soft shadow, where the camera puts it.
 ctl("wallpaper off")
@@ -926,7 +969,7 @@ if touchpad(0.5, 0.25):
     check("touchpad: spreading the fingers zooms in", ctl()["scale"] > before * 1.4, f"{before} -> {ctl()['scale']}")
     qmp("key", "esc")
     settle()
-    visible = [b for b in real().values() if 0 <= b[0] and b[0] + b[2] <= W and 30 <= b[1] and b[1] + b[3] <= H - 60]
+    visible = [b for b in real().values() if OX <= b[0] and b[0] + b[2] <= OX + MW and OY + 30 <= b[1] and b[1] + b[3] <= OY + MH - 60]
     point(*centre(visible[0] if visible else real()[A]))
     touchpad(0.5, 0.4, 0.4)
     check("touchpad: a pinch over a window is the app's", ctl()["state"] == "idle")
@@ -961,8 +1004,13 @@ def device_pinch(start, end, steps=29):
     def touch(kind, slot, tracking, axis="x", value=0):
         return {"type": "mtt", "data": {"type": kind, "slot": slot, "tracking-id": tracking, "axis": axis, "value": value}}
 
+    # A finger lifts with tracking id -1 (QEMU passes the id through as it
+    # is). Any left down by a run cut short mid-gesture lift first.
+    lift = [touch("end", 0, -1), touch("end", 1, -1)]
     stream.readline()
     call("qmp_capabilities")
+    call("input-send-event", events=lift)
+    time.sleep(0.1)
     middle = 16384
     half = lambda spread: int(spread * 16384)
     ok = "return" in call("input-send-event", events=[
@@ -970,9 +1018,11 @@ def device_pinch(start, end, steps=29):
         touch("begin", 1, 2, "x", middle + half(start)), touch("data", 1, 2, "x", middle + half(start)), touch("data", 1, 2, "y", middle)])
     for i in range(1, steps + 1):
         spread = start + (end - start) * i / steps
-        call("input-send-event", events=[touch("data", 0, 1, "x", middle - half(spread)), touch("data", 1, 2, "x", middle + half(spread))])
+        # A data event is for the slot last named: update names it.
+        call("input-send-event", events=[touch("update", 0, 1), touch("data", 0, 1, "x", middle - half(spread)),
+                                         touch("update", 1, 2), touch("data", 1, 2, "x", middle + half(spread))])
         time.sleep(0.015)
-    call("input-send-event", events=[touch("end", 0, 1), touch("end", 1, 2)])
+    call("input-send-event", events=lift)
     connection.close()
     time.sleep(0.8)
     return ok
@@ -997,7 +1047,7 @@ W, H = layout()
 second = next(m for m in json.loads(vm("hyprctl monitors -j")) if m["name"] == "SWEEP-2")
 sx, sy = second["x"], second["y"]
 sw, sh = second["width"] / second["scale"], second["height"] / second["scale"]
-point(W / 4, H / 2)
+point(OX + MW / 4, OY + MH / 2)
 refused = vm(f"hyprctl expanse space {second['activeWorkspace']['name']}")
 check("hyprctl expanse space refuses another monitor's workspace", "isn't on the canvas's monitor" in refused and ctl()["state"] == "idle", refused.strip())
 focus(B)
@@ -1010,7 +1060,7 @@ there = pixel(*centre(a))
 check("several monitors: a window parked over the other monitor isn't drawn there", there != body, f"{there} vs {body}")
 point(*centre(a))
 check("and doesn't take the pointer's focus there", active() != A, active())
-point(W / 4, H / 2)
+point(OX + MW / 4, OY + MH / 2)
 focus(A)
 settle()
 a = real()[A]
@@ -1023,17 +1073,28 @@ check("the canvas opens on the monitor with the pointer", s["workspace"] == seco
 qmp("key", "esc")
 settle()
 check("and closes without moving anything", real() == before)
-point(W / 4, H / 2)
+point(OX + MW / 4, OY + MH / 2)
 zoom_out()
 point(sx + sw / 2, sy + sh / 2)
 qmp("click")
 check("a click on the other monitor closes the canvas", settle())
 open_app(G, "600 380", second["activeWorkspace"]["name"])
+K = f"sweep-k-{RUN}"
+open_app(K, "400 300", second["activeWorkspace"]["name"])
 g = real()[G]
+point(sx + sw / 2, sy + sh / 2)
 vm("hyprctl output remove SWEEP-2")
 wait(3)
 gone = real()[G]
-check("unplugging a monitor keeps its windows' places on the screen", gone[0] == g[0] - sx and gone[1] == g[1] - sy, f"{g} -> {gone}")
+landed = next(m for m in json.loads(vm("hyprctl monitors -j")) if m["id"] == client(G)["monitor"])
+check("unplugging a monitor keeps its windows' places on the screen", gone[0] == g[0] - sx + landed["x"] and gone[1] == g[1] - sy + landed["y"], f"{g} -> {gone} on {landed['name']}")
+# Hyprland moves the pointer about as the monitor goes (often into a
+# bottom corner of another), and re-sends its position as windows close
+# there. That isn't moving into the hot corner.
+gone_state = ctl()["state"]
+vm(f"kill {client(K)['pid']}")
+wait(1.5)
+check("unplugging the monitor with the pointer on it, or a window closing after, doesn't zoom out", gone_state == "idle" and ctl()["state"] == "idle", f"{gone_state} {ctl()['state']} {cursor()}")
 vm("hyprctl output create headless SWEEP-2")
 wait(3.5)
 back = real()[G]
@@ -1041,7 +1102,7 @@ check("plugging it back in puts them back exactly", back == g, f"{g} -> {back}")
 vm("hyprctl output remove SWEEP-2")
 wait(2)
 W, H = layout()
-point(W / 2, H / 2)
+point(OX + MW / 2, OY + MH / 2)
 
 # ===== Edge cases.
 # The workspaces bar fits beside the minimap however many workspaces there are.
@@ -1067,9 +1128,9 @@ stayed = []
 for i, delay in enumerate((0.1, 0.18, 0.25, 0.3, 0.35, 0.42, 0.5)):
     focus(A)
     settle()
-    qmp("key", "meta_l+right" if i % 2 == 0 else "meta_l+left", "sleep", int(delay * 1000), "key", f"meta_l+{other}", "sleep", 2500)
+    qmp("key", "meta_l+right" if i % 2 == 0 else "meta_l+left", "sleep", int(delay * 1000), "key", f"meta_l+{OTHER_KEY}", "sleep", 2500)
     stayed.append(json.loads(vm("hyprctl activeworkspace -j"))["name"] == other)
-    qmp("key", f"meta_l+{WORKSPACE}", "sleep", 1500)
+    qmp("key", f"meta_l+{WORKSPACE_KEY}", "sleep", 1500)
     settle()
 check("a workspace bind as a glide ends never bounces back", all(stayed), f"{stayed}")
 
@@ -1088,9 +1149,9 @@ for i in range(3):
     wait(1.5)
 for _ in range(2):
     zoom_out()
-    vm('hyprctl dispatch "hl.dsp.cursor.move({ x = 600, y = 400 })"')
+    vm(f'hyprctl dispatch "hl.dsp.cursor.move({{ x = {OX + 600}, y = {OY + 400} }})"')
     qmp("press", "sleep", 150)
-    vm('hyprctl dispatch "hl.dsp.cursor.move({ x = 640, y = 400 })"')
+    vm(f'hyprctl dispatch "hl.dsp.cursor.move({{ x = {OX + 640}, y = {OY + 400} }})"')
     vm(UNLOAD)
     qmp("release", "sleep", 300)
     qmp("key", "esc")
@@ -1101,7 +1162,7 @@ check("unloading mid-glide, zoomed out, mid-drag and as windows open never crash
 for c in clients():
     if c["class"].startswith(f"sweep-") and c["class"].endswith(RUN) or c["class"].startswith(f"{G}-") or c["class"] == DIALOG:
         vm(f"kill {c['pid']}")
-APPS += [D, E, F, G]
+APPS += [D, E, F, G, K]
 
 # --- Clean up.
 for c in json.loads(vm("hyprctl clients -j")):
