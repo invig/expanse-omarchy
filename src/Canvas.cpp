@@ -540,6 +540,11 @@ namespace Expanse {
             const auto TARGET = window->layoutTarget();
             if (TARGET && !TARGET->floating() && !Fullscreen::controller()->isFullscreen(window)) {
                 noteOriginal(window);
+                // Tiled since the canvas first saw it (you tiled it): that's where it goes back to.
+                if (auto* entry = tracked(window)) {
+                    entry->wasTiled = true;
+                    entry->box      = TARGET->position();
+                }
                 tiled.emplace_back(TARGET, TARGET->position());
             }
         }
@@ -1067,11 +1072,15 @@ namespace Expanse {
         const auto TARGET    = m_target.lock();
         const auto WORKSPACE = workspace();
         const auto MARQUEE   = marquee();
+        const auto MAP       = minimap();
+        const auto HINT      = m_offscreenHint.lock();
         const auto SCROLLED  = scrolledFor(WORKSPACE);
-        return std::format(R"({{"state":"{}","paused":{},"workspace":"{}","scale":{:.3f},"origin":[{:.1f},{:.1f}],"scrolled":[{:.1f},{:.1f}],"autoCentre":{},"wallpaper":{},"hotCorner":"{}","hover":"{}","target":"{}","marquee":{},"windows":[{}],"spaces":[{}]}})",
+        return std::format(R"({{"state":"{}","paused":{},"workspace":"{}","scale":{:.3f},"origin":[{:.1f},{:.1f}],"scrolled":[{:.1f},{:.1f}],"autoCentre":{},"wallpaper":{},"hotCorner":"{}","hover":"{}","target":"{}","marquee":{},"minimap":{},"offscreenNotice":"{}","windows":[{}],"spaces":[{}]}})",
                            STATES[m_state], m_paused, WORKSPACE ? jsonEscape(WORKSPACE->m_name) : "", m_camera.scale, m_camera.origin.x, m_camera.origin.y, SCROLLED.x,
                            SCROLLED.y, m_autoCentre, wallpaper(), jsonEscape(g_hotCorner.corner()), HOVER ? jsonEscape(HOVER->m_title) : "", TARGET ? jsonEscape(TARGET->m_title) : "",
-                           MARQUEE ? std::format("[{:.1f},{:.1f},{:.1f},{:.1f}]", MARQUEE->x, MARQUEE->y, MARQUEE->w, MARQUEE->h) : "null", windows, spaces) +
+                           MARQUEE ? std::format("[{:.1f},{:.1f},{:.1f},{:.1f}]", MARQUEE->x, MARQUEE->y, MARQUEE->w, MARQUEE->h) : "null",
+                           MAP ? std::format("[{:.0f},{:.0f},{:.0f},{:.0f}]", MAP->box.x, MAP->box.y, MAP->box.w, MAP->box.h) : "null", HINT ? jsonEscape(HINT->m_class) : "", windows,
+                           spaces) +
             "\n";
     }
 

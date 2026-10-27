@@ -97,8 +97,9 @@ def check(name, ok, detail=""):
 
 
 def mine(state=None):
+    # This run's windows on the canvas, by app id.
     state = state or ctl()
-    return {w["class"]: w for w in state["windows"] if w["class"] in APPS}
+    return {w["class"]: w for w in state["windows"] if w["class"].startswith("sweep-") and w["class"].endswith(RUN)}
 
 
 def box(window, key="canvas"):
@@ -608,6 +609,285 @@ actions_ok = all(r.get("action", "hyprctl expanse tidy").split()[2] in verbs if 
 checked_ok = all(subprocess.run(SSH + [ENV + r["checked"]], capture_output=True).returncode in (0, 1) for r in rows.values() if "checked" in r)
 check("the Omarchy menu rows parse, and their actions and checks run", actions_ok and checked_ok)
 
+# ===== The README, line by line: what the checks above don't cover.
+H1, H2, X1, X2, X3, T1, BIG = (f"sweep-{name}-{RUN}" for name in ("h1", "h2", "x1", "x2", "x3", "t1", "big"))
+POPUP = f"org.expanse.SweepPopup{RUN}"
+
+
+def view_centre(state):
+    # The canvas point in the middle of the usable screen.
+    middle = screen_middle()
+    monitor = json.loads(vm("hyprctl monitors -j"))[0]
+    return (state["origin"][0] + (middle[0] - monitor["x"]) / state["scale"], state["origin"][1] + (middle[1] - monitor["y"]) / state["scale"])
+
+
+def drag(start, end, modifier=None, button="left"):
+    point(*start)
+    steps = ["hold", modifier] if modifier else []
+    steps += ["press", button, "sleep", 150, "move", int((start[0] + end[0]) / 2), int((start[1] + end[1]) / 2), W, H, "sleep", 200,
+              "move", int(end[0]), int(end[1]), W, H, "sleep", 400, "release", button, "sleep", 500]
+    if modifier:
+        steps += ["let", modifier]
+    qmp(*steps)
+
+
+def greens():
+    return float(vm('grim -s 0.25 /tmp/sweep-green.png && magick /tmp/sweep-green.png -channel RGB -fx "g>0.85&&r<0.2&&b<0.2" -separate -delete 1,2 -format "%[fx:mean*w*h]" info:').strip() or 0)
+
+
+# Plain arrows move the highlight on the canvas, the view following; Return dives into it.
+zoom_out()
+before = ctl()
+qmp("key", "right", "sleep", 900)
+after = ctl()
+check("plain arrows move the highlight on the canvas and the view follows", after["origin"] != before["origin"], f"{before['origin']} -> {after['origin']}")
+qmp("key", "ret")
+check("Return dives into the highlighted window", settle() and active() in real())
+
+# Middle-drag and Space + drag pan.
+zoom_out()
+spot = empty_spot(ctl())
+before = ctl()["origin"]
+drag(spot, (spot[0] + 120, spot[1] + 80), button="middle")
+check("middle-drag pans", ctl()["origin"] != before)
+spot = empty_spot(ctl())
+before = ctl()
+drag(spot, (spot[0] + 120, spot[1] + 80), modifier="spc")
+after = ctl()
+check("Space + drag pans", after["origin"] != before["origin"] and {k: box(v) for k, v in mine(after).items()} == {k: box(v) for k, v in mine(before).items()})
+
+# Snapping to the middle of the screen; Super turns snapping off. On the
+# canvas at 100%, with the window in view.
+qmp("key", "esc")
+settle()
+ctl(f"focus {A}")
+settle()
+point(*empty_spot(ctl()))
+ctl("pinch 1.0")
+wait()
+s = ctl()
+w = mine(s)[A]
+middle = screen_middle()
+offset = (centre(w["screen"])[0] - middle[0] - 7, centre(w["screen"])[1] - middle[1] - 5)  # land 7, 5 px from the middle
+drag((w["screen"][0] + 40, w["screen"][1] + 40), (w["screen"][0] + 40 - offset[0], w["screen"][1] + 40 - offset[1]))
+s = ctl()
+c = centre(real()[A])
+vc = view_centre(s)  # at 100%, real coordinates
+check("a dragged window snaps to the middle of the screen", abs(c[0] - vc[0]) <= 1 and abs(c[1] - vc[1]) <= 1, f"{c} vs {vc}")
+w = mine(s)[A]
+drag((w["screen"][0] + 40, w["screen"][1] + 40), (w["screen"][0] + 40 + 7, w["screen"][1] + 40 + 5), modifier="meta_l")
+c = centre(real()[A])
+check("holding Super turns snapping off", 4 <= c[0] - vc[0] <= 9 and 3 <= c[1] - vc[1] <= 7, f"{c} vs {vc}")
+qmp("key", "esc")
+settle()
+
+# Shift-click and Super + A select; the x on a selected window closes every selected one.
+open_app(X1, "700 440")
+open_app(X2, "700 440")
+settle()
+zoom_out()
+qmp("hold", "shift")
+point(*centre(mine()[X1]["screen"]))
+qmp("click", "sleep", 300, "let", "shift", "sleep", 200)
+ctl("zoom 0.6")  # the x shows on windows at least 220 px wide on screen
+wait()
+x2 = mine()[X2]["screen"]
+middle = screen_middle()
+ctl(f"pan {centre(x2)[0] - middle[0]:.0f} {centre(x2)[1] - middle[1]:.0f}")
+wait(0.8)
+qmp("hold", "shift")
+point(*centre(mine()[X2]["screen"]))
+qmp("click", "sleep", 300, "let", "shift", "sleep", 300)
+picked = {k for k, v in mine().items() if v["selected"]}
+check("Shift-click adds windows to the selection", picked == {X1, X2}, f"{picked}")
+x2 = mine()[X2]["screen"]
+point(x2[0] + x2[2] - 23, x2[1] + 23)  # its x
+qmp("click", "sleep", 2000)
+check("the x on a selected window closes every selected window", X1 not in real() and X2 not in real(), f"{list(real())}")
+qmp("key", "meta_l+a", "sleep", 600)
+check("Super + A selects every window", all(v["selected"] for v in mine().values()) and len(mine()) >= 3)
+qmp("key", "esc", "sleep", 400)
+
+# Minimap drag; right-click goes back to 100%.
+m = ctl()["minimap"]
+start = (m[0] + 40, m[1] + 40)
+point(*start)
+qmp("press", "sleep", 200)
+first = ctl()["origin"]
+qmp("move", int(start[0] + 60), int(start[1] + 30), W, H, "sleep", 500)
+moved = ctl()["origin"]
+qmp("release", "sleep", 300)
+check("dragging on the minimap moves the view with it", moved != first, f"{first} -> {moved}")
+spot = empty_spot(ctl())
+point(*spot)
+qmp("click", "right")
+check("right-click on the canvas goes back to 100%", settle())
+
+# Auto-centre off: clicking a window partly on screen leaves the canvas where it is.
+ctl("autocentre off")
+r = real()
+move_by(B, W - 260 - r[B][0], 0)
+before = real()
+point(W - 120, centre(before[B])[1])
+qmp("click", "sleep", 1500)
+check("auto-centre off: clicking a window partly on screen leaves the canvas where it is", real() == before and active() == B)
+# ...and keyboard focus to a window entirely off screen says so.
+move_by(B, 3 * W, 0)
+focus(A)
+wait(1)
+focus(B)
+wait(1.5)
+check("auto-centre off: focus on a window off screen gives a notification", ctl()["offscreenNotice"] == B, ctl()["offscreenNotice"])
+ctl("autocentre on")
+focus(A)
+settle()
+
+# After a restart too: the spot comes from the saved file.
+spot = canvas_of(D)
+vm("hyprctl plugin unload ~/expanse-hypr/expanse.so")
+vm(f"kill {client(D)['pid']}")
+wait(1.5)
+vm("hyprctl plugin load ~/expanse-hypr/expanse.so")
+wait(1.5)
+open_app(D, "700 440")
+settle()
+check("after a restart too, a window its app opens again returns to its spot", canvas_of(D) == spot, f"{spot} -> {canvas_of(D)}")
+
+# A tiled window floats on the canvas, and pausing puts it back into the layout.
+open_app(T1, "700 440")
+vm(f'hyprctl dispatch "hl.dsp.window.float({{ action = \\"unset\\", window = \\"class:{T1}\\" }})"')
+wait(1.5)
+tiled = lambda: next((not c["floating"] for c in clients() if c["class"] == T1), None)
+was = tiled()
+zoom_out()
+floats = tiled() is False
+qmp("key", "esc")
+settle()
+ctl("pause")
+wait(1.5)
+check("a tiled window floats on the canvas, and pausing puts it back into its layout", was is True and floats and tiled() is True, f"{was} {floats} {tiled()}")
+ctl("resume")
+wait(2)
+vm(f"kill {client(T1)['pid']}")
+
+# A window too big for the screen shrinks to fit as you go to it, and grows back on a bigger one.
+open_app(BIG, "1500 1000")
+ctl("screen 1100 800")
+wait(2.5)
+ctl(f"focus {BIG}")
+settle()
+small = real()[BIG]
+check("a window too big for the screen shrinks to fit as you go to it", small[2] <= 1100 and small[3] <= 800, f"{small}")
+ctl("screen")
+wait(2.5)
+check("and grows back on the big screen", real()[BIG][2:] == [1500, 1000], f"{real()[BIG]}")
+
+# Leaving a workspace from the canvas without moving around leaves it as it was.
+before = real()
+zoom_out()
+tiles = {t["name"]: t["tile"] for t in ctl()["spaces"]}
+tile = tiles[f"Workspace {other}"]
+point(tile[0] + tile[2] / 2, tile[1] + tile[3] / 2)
+qmp("click", "sleep", 2500)
+check("leaving a workspace from the canvas leaves its windows where they were", {k: v for k, v in real().items() if k in before} == before)
+qmp("key", "esc")
+settle()
+qmp("key", f"meta_l+{WORKSPACE}", "sleep", 2000)
+settle()
+
+# Placement on a workspace that isn't showing, mid-glide, and while zoomed out.
+open_app(H1, "700 440", other)
+on_other = [r for k, r in real().items() if k in (E, H1)]
+check("a window opened on a workspace that isn't showing gets free space there", len(on_other) == 2 and not any_overlap(on_other))
+zoom_out()
+open_app(H2, "700 440", other)
+qmp("key", "esc")
+settle()
+wait(1)
+on_other = [r for k, r in real().items() if k in (E, H1, H2)]
+check("one opened elsewhere while zoomed out is placed once the canvas is back", len(on_other) == 3 and not any_overlap(on_other))
+qmp("key", "meta_l+right")
+vm(f'hyprctl dispatch "hl.dsp.exec_cmd(\\"foot --app-id={X3} sleep infinity\\", {{ float = true, size = \\"640 400\\" }})"')
+settle()
+wait(1)
+r = real()
+others = [b for k, b in r.items() if k != X3 and client(k) and client(k)["workspace"]["name"] == WORKSPACE]
+check("one opened mid-glide is placed once the glide lands", X3 in r and not any(overlap(r[X3], b) for b in others), f"{r.get(X3)}")
+
+# An open menu isn't drawn on the canvas, and is there again at 100%.
+vm(f"setsid python3 /home/test/expanse-hypr/scripts/dialog.py {POPUP} popup >/dev/null 2>&1 &")
+wait(5)
+open_menu = greens()
+zoom_out()
+zoomed = greens()
+qmp("key", "esc")
+settle()
+again = greens()
+check("an open menu isn't drawn on the canvas, and is there again at 100%", open_menu > 200 and zoomed == 0 and again > 200, f"{open_menu} {zoomed} {again}")
+if client(POPUP):
+    vm(f"kill {client(POPUP)['pid']}")
+
+# Maximised windows sit outside the canvas too.
+focus(A)
+settle()
+vm('hyprctl dispatch "hl.dsp.window.fullscreen({ mode = \\"maximized\\" })"')
+wait(1.5)
+zoom_out()
+during = fs()
+qmp("key", "esc")
+settle()
+wait(1)
+check("a maximised window leaves maximised on the canvas and gets it back", during == 0 and fs() == 1, f"{during} {fs()}")
+vm('hyprctl dispatch "hl.dsp.window.fullscreen({ mode = \\"maximized\\" })"')
+wait(1)
+
+# Super + arrows: Omarchy's movefocus binds are gone; with cursor:no_warps the pointer stays put.
+binds = json.loads(vm("hyprctl binds -j"))
+check("Super + arrows have one bind each (Omarchy's movefocus ones unbound)",
+      all(sum(1 for b in binds if b["modmask"] == 64 and b["key"].lower() == key) == 1 for key in ("left", "right", "up", "down")))
+vm('hyprctl eval "hl.config({ cursor = { no_warps = true } })"')
+point(W / 2, H / 2 + 200)
+here = cursor()
+qmp("key", "meta_l+left")
+settle()
+check("with cursor:no_warps a hop leaves the pointer where it is", abs(cursor()[0] - here[0]) <= 2 and abs(cursor()[1] - here[1]) <= 2, f"{here} -> {cursor()}")
+vm('hyprctl eval "hl.config({ cursor = { no_warps = false } })"')
+
+# Each monitor's canvas has its own minimap.
+vm("hyprctl output create headless SWEEP-3")
+wait(3)
+W, H = layout()
+third = next(m for m in json.loads(vm("hyprctl monitors -j")) if m["name"] == "SWEEP-3")
+point(third["x"] + 300, third["y"] + 300)
+zoom_out()
+m = ctl()["minimap"]
+check("each monitor's canvas has its own minimap", m and third["x"] <= m[0] <= third["x"] + third["width"] / third["scale"], f"{m} {third['x']}")
+qmp("key", "esc")
+settle()
+vm("hyprctl output remove SWEEP-3")
+wait(2)
+W, H = layout()
+point(W / 2, H / 2)
+
+# Drawn as Expanse draws them: each window's border, and a soft shadow, where the camera puts it.
+ctl("wallpaper off")
+zoom_out()
+s = ctl()
+w = max(mine(s).values(), key=lambda v: v["screen"][2])["screen"]
+below = pixel(w[0] + w[2] - 30, w[1] + w[3] + 1)  # the border, just outside the window
+shade = pixel(w[0] + w[2] - 30, w[1] + w[3] + 3)  # the shadow, just past the border (the label is at the left)
+far = pixel(*empty_spot(s))                       # the plain background
+qmp("key", "esc")
+settle()
+ctl("wallpaper default")
+darker = int(shade[:2], 16) < int(far[:2], 16) if len(shade) >= 6 and len(far) >= 6 else False
+check("zoomed out, every window has its theme border and a soft shadow", below[:6] != far[:6] and darker, f"border {below} shadow {shade} background {far}")
+
+for app in (X1, X3, H1, H2, BIG):
+    if client(app):
+        vm(f"kill {client(app)['pid']}")
+APPS += [X1, X3, H1, H2, BIG]
+
 # ===== A touchpad, through the kernel and libinput (needs root in the VM for /dev/uinput).
 ASKPASS = os.environ.get("VM_ASKPASS")
 
@@ -628,7 +908,8 @@ if touchpad(0.5, 0.25):
     check("touchpad: spreading the fingers zooms in", ctl()["scale"] > before * 1.4, f"{before} -> {ctl()['scale']}")
     qmp("key", "esc")
     settle()
-    point(*centre(real()[B]))
+    visible = [b for b in real().values() if 0 <= b[0] and b[0] + b[2] <= W and 30 <= b[1] and b[1] + b[3] <= H - 60]
+    point(*centre(visible[0] if visible else real()[A]))
     touchpad(0.5, 0.4, 0.4)
     check("touchpad: a pinch over a window is the app's", ctl()["state"] == "idle")
     qmp("hold", "alt", "sleep", 150)
