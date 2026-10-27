@@ -352,10 +352,9 @@ namespace Expanse::Render {
 
     // Other monitors. A canvas reaches past its monitor's edges, over its
     // neighbours': a window there is on another canvas, off its screen. It
-    // isn't drawn on the neighbour, and once it's off its own screen entirely
-    // it takes no clicks or pointer focus there either (keyboard focus still
-    // reaches it, and centres it).
-    constexpr uint32_t INPUT_BLOCK_PARKED = 1U << 7; // past Hyprland's own reasons
+    // isn't drawn on the neighbour, and while the pointer is there it takes
+    // no clicks or pointer focus (keyboard focus still reaches it).
+    constexpr uint32_t INPUT_BLOCK_PARKED = 1U << 31; // well past Hyprland's own reasons
 
     static bool onAnotherCanvas(const PHLWINDOW& window, const PHLMONITOR& monitor) {
         if (!window->m_isMapped || !window->m_isFloating || window->m_pinned || window->m_monitorMovedFrom != -1 || !window->m_workspace ||
@@ -391,20 +390,16 @@ namespace Expanse::Render {
         g_frame.foreign.clear();
     }
 
-    void updateParking(bool active) {
-        const auto& MONITORS = State::monitorState()->monitors();
+    void updateParking(bool active, const Vector2D& pointer) {
+        PHLMONITOR UNDER;
+        for (const auto& monitor : State::monitorState()->monitors())
+            if (monitor && monitor->m_enabled && CBox{monitor->m_position, monitor->m_size}.containsPoint(pointer))
+                UNDER = monitor;
         for (const auto& window : Desktop::windowState()->windows()) {
-            bool       park = false;
-            const auto OWN  = window->m_monitor.lock();
-            if (active && OWN && !Fullscreen::controller()->isFullscreen(window)) {
-                const CBox BOX = realBox(window);
-                park           = BOX.intersection({OWN->m_position, OWN->m_size}).empty() &&
-                    std::ranges::any_of(MONITORS, [&](const PHLMONITOR& other) {
-                        return other && other != OWN && other->m_enabled && onAnotherCanvas(window, other) && !BOX.intersection({other->m_position, other->m_size}).empty();
-                    });
-            }
+            const bool PARK = active && UNDER && !Fullscreen::controller()->isFullscreen(window) && onAnotherCanvas(window, UNDER) &&
+                !realBox(window).intersection({UNDER->m_position, UNDER->m_size}).empty();
             auto& reasons = window.get()->*robbed(SInputBlockTag{});
-            reasons       = park ? reasons | INPUT_BLOCK_PARKED : reasons & ~INPUT_BLOCK_PARKED;
+            reasons       = PARK ? reasons | INPUT_BLOCK_PARKED : reasons & ~INPUT_BLOCK_PARKED;
         }
     }
 
@@ -559,7 +554,7 @@ namespace Expanse::Render {
         // shadow, code) that go away with the plugin, so they go first. The
         // pass is rebuilt every frame and nothing is drawing now.
         g_pHyprRenderer->m_renderPass.clear();
-        updateParking(false);
+        updateParking(false, {});
         unhideForeignWindows();
         unhideCanvasWindows();
         restoreGeometry();

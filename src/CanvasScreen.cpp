@@ -77,13 +77,18 @@ namespace Expanse {
 
     void CCanvas::updateHome() {
         // While no window on a workspace is shrunk for a smaller screen, its
-        // canvas layout is its home layout.
+        // canvas layout is its home layout. Not on a workspace whose screen
+        // changed since it was fitted (moved to another monitor while out of
+        // sight, say): its windows are where Hyprland put them until then.
         std::vector<std::pair<PHLWORKSPACE, bool>> derived;
         const auto DERIVED = [&](const PHLWORKSPACE& workspace) {
             for (const auto& [ws, is] : derived)
                 if (ws == workspace)
                     return is;
-            derived.emplace_back(workspace, isDerived(workspace));
+            const auto LAST    = m_lastScreens.find(workspace->m_name);
+            const auto MONITOR = workspace->m_monitor.lock();
+            const bool WAITING = LAST != m_lastScreens.end() && MONITOR && LAST->second.pos() != usableAreaOf(MONITOR).pos();
+            derived.emplace_back(workspace, WAITING || isDerived(workspace));
             return derived.back().second;
         };
         for (auto& entry : m_originals)
@@ -230,6 +235,7 @@ namespace Expanse {
             // on the canvas read as they were before anything else.
             m_scrolled[WORKSPACE->m_name] = SCROLL - cameWith(WORKSPACE, SCROLL, MOVED);
         }
+        m_lastScreens[WORKSPACE->m_name] = SCREEN;
 
         for (const auto& window : canvasWindows())
             noteOriginal(window);
@@ -244,7 +250,6 @@ namespace Expanse {
             // Whatever was in the middle of the old screen stays in the middle of the new one.
             m_scrolled[WORKSPACE->m_name] = scrolledFor(WORKSPACE) - ((SCREEN.size() - LAST->size()) / 2.0).round();
         }
-        m_lastScreens[WORKSPACE->m_name] = SCREEN;
 
         fitLayoutToScreen(0, false);
         damage();
@@ -274,7 +279,7 @@ namespace Expanse {
     void CCanvas::relayoutOn(const PHLMONITOR& monitor) {
         // Only a workspace whose screen changed: fitting also shrinks windows
         // bigger than the screen. One never laid out just notes its screen.
-        m_layoutMonitor      = monitor;
+        SOnMonitor here{*this, monitor};
         const auto WORKSPACE = workspace();
         const CBox SCREEN    = usableArea();
         if (WORKSPACE) {
@@ -284,7 +289,6 @@ namespace Expanse {
             else if (IT->second.pos() != SCREEN.pos() || IT->second.size() != SCREEN.size())
                 relayout();
         }
-        m_layoutMonitor.reset();
     }
 
     void CCanvas::relayoutAll() {

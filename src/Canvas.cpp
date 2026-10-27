@@ -2,6 +2,7 @@
 
 #include "Canvas.hpp"
 #include "HotCorner.hpp"
+#include "Later.hpp"
 
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
@@ -11,7 +12,6 @@
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/layout/target/Target.hpp>
-#include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/output/Monitor.hpp>
@@ -201,9 +201,14 @@ namespace Expanse {
             return;
 
         const bool FROMIDLE = !live();
-        // On the window's own monitor, which isn't always the focused one.
-        if (FROMIDLE && !begin(window->m_monitor.lock()))
-            return;
+        // On the window's own monitor, which isn't always the focused one,
+        // until the glide has started there.
+        std::optional<SOnMonitor> here;
+        if (FROMIDLE) {
+            here.emplace(*this, window->m_monitor.lock());
+            if (!begin(window->m_monitor.lock()))
+                return;
+        }
 
         if (!isCanvasWindow(window))
             return;
@@ -225,7 +230,7 @@ namespace Expanse {
 
     void CCanvas::glideLater(PHLWINDOW window, bool fromKeyboard) {
         // Out of the event that asked for it: gliding floats and moves windows.
-        g_pEventLoopManager->doLater([this, ref = PHLWINDOWREF{window}, fromKeyboard] {
+        later([this, ref = PHLWINDOWREF{window}, fromKeyboard] {
             if (const auto WINDOW = ref.lock(); WINDOW && !live() && m_autoCentre && offItsScreen(WINDOW))
                 glideTo(WINDOW, fromKeyboard);
         });
@@ -349,7 +354,7 @@ namespace Expanse {
         else if (m_state == STATE_GLIDING) {
             // Moving windows from inside a frame is unsafe; the camera holds
             // the final view until the move lands.
-            g_pEventLoopManager->doLater([this] {
+            later([this] {
                 if (m_state == STATE_GLIDING && !m_animating)
                     commit();
             });
@@ -576,7 +581,7 @@ namespace Expanse {
         SLookAt    here{*this, window->m_workspace};
         const auto ANCHOR = topWindowInView(window);
         // Out of the event: Hyprland is still mapping the window.
-        g_pEventLoopManager->doLater([this, ref = PHLWINDOWREF{window}, anchor = PHLWINDOWREF{ANCHOR}] {
+        later([this, ref = PHLWINDOWREF{window}, anchor = PHLWINDOWREF{ANCHOR}] {
             if (const auto WINDOW = ref.lock())
                 placeNewWindow(WINDOW, anchor.lock());
         });
@@ -875,10 +880,13 @@ namespace Expanse {
     }
 
     CBox CCanvas::usableArea() const {
-        const auto MONITOR = monitor();
-        if (!MONITOR)
+        return usableAreaOf(monitor());
+    }
+
+    CBox CCanvas::usableAreaOf(const PHLMONITOR& monitor) const {
+        if (!monitor)
             return {};
-        CBox area = MONITOR->logicalBoxMinusReserved();
+        CBox area = monitor->logicalBoxMinusReserved();
         if (m_screenOverride) {
             area.w = m_screenOverride->x;
             area.h = m_screenOverride->y;
@@ -886,15 +894,18 @@ namespace Expanse {
         return area;
     }
 
+    bool CCanvas::onCanvasMonitor(const Vector2D& pos) const {
+        const auto MONITOR = m_monitor.lock();
+        return live() && MONITOR && CBox{MONITOR->m_position, MONITOR->m_size}.containsPoint(pos);
+    }
+
     bool CCanvas::offItsScreen(const PHLWINDOW& window) {
         // Judged on its own monitor: a window parked over another monitor
         // takes Hyprland's monitor focus there with it.
         if (!window)
             return false;
-        m_layoutMonitor = window->m_monitor;
-        const bool OFF  = isCanvasWindow(window) && !fullyVisible(window);
-        m_layoutMonitor.reset();
-        return OFF;
+        SOnMonitor here{*this, window->m_monitor.lock()};
+        return isCanvasWindow(window) && !fullyVisible(window);
     }
 
     bool CCanvas::fullyVisible(PHLWINDOW window) const {

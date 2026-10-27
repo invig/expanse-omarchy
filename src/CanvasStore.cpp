@@ -67,27 +67,32 @@ namespace Expanse {
         // whose monitor goes away can come back as another number): its state
         // goes with it.
         std::erase_if(m_workspaceNames, [](const auto& seen) { return !seen.first.lock(); });
+        std::vector<std::pair<std::string, std::string>> renames; // old, new
         for (const auto& ref : State::workspaceState()->workspaces()) {
             const auto WORKSPACE = ref.lock();
             if (!WORKSPACE || WORKSPACE->inert())
                 continue;
             const auto IT = std::ranges::find_if(m_workspaceNames, [&](const auto& seen) { return seen.first.lock() == WORKSPACE; });
-            if (IT == m_workspaceNames.end()) {
+            if (IT == m_workspaceNames.end())
                 m_workspaceNames.emplace_back(WORKSPACE, WORKSPACE->m_name);
-                continue;
+            else if (IT->second != WORKSPACE->m_name) {
+                renames.emplace_back(IT->second, WORKSPACE->m_name);
+                IT->second = WORKSPACE->m_name;
             }
-            if (IT->second == WORKSPACE->m_name)
-                continue;
-            if (const auto OLD = m_scrolled.find(IT->second); OLD != m_scrolled.end()) {
-                m_scrolled[WORKSPACE->m_name] = OLD->second;
-                m_scrolled.erase(IT->second);
-            }
-            if (const auto OLD = m_lastScreens.find(IT->second); OLD != m_lastScreens.end()) {
-                m_lastScreens[WORKSPACE->m_name] = OLD->second;
-                m_lastScreens.erase(IT->second);
-            }
-            IT->second = WORKSPACE->m_name;
         }
+        // All taken out, then all put back: two workspaces can swap names.
+        const auto MOVE = [&](auto& state) {
+            std::vector<std::pair<std::string, typename std::decay_t<decltype(state)>::mapped_type>> moving;
+            for (const auto& [from, to] : renames)
+                if (const auto IT = state.find(from); IT != state.end()) {
+                    moving.emplace_back(to, IT->second);
+                    state.erase(IT);
+                }
+            for (auto& [to, value] : moving)
+                state[to] = value;
+        };
+        MOVE(m_scrolled);
+        MOVE(m_lastScreens);
 
         // A window moved to another workspace (a bind, say) has its spot on
         // that workspace's canvas where it is now.
@@ -226,10 +231,9 @@ namespace Expanse {
         for (const auto& monitor : State::monitorState()->monitors()) {
             if (!monitor || !monitor->m_enabled || !monitor->m_activeWorkspace)
                 continue;
-            m_layoutMonitor = monitor;
+            SOnMonitor here{*this, monitor};
             m_lastScreens[monitor->m_activeWorkspace->m_name] = usableArea();
         }
-        m_layoutMonitor.reset();
         const auto LAYOUT = Store::load();
         if (!LAYOUT)
             return;

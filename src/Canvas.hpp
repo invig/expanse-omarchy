@@ -180,6 +180,8 @@ namespace Expanse {
         bool                   begin(PHLMONITOR monitor = nullptr); // on the focused monitor, or this one
         bool                   offItsScreen(const PHLWINDOW& window); // on its monitor's canvas, not fully on that screen
         CBox                   usableArea() const;
+        CBox                   usableAreaOf(const PHLMONITOR& monitor) const;
+        bool                   onCanvasMonitor(const Vector2D& pos) const; // the canvas is up, and this is on its monitor
         SCamera                homeCamera() const;
         SCamera                fitCamera(double maxScale) const;
         SCamera                cameraFor(PHLWINDOW window) const;
@@ -269,6 +271,19 @@ namespace Expanse {
         std::unordered_map<std::string, CBox> m_lastScreens;
         PHLMONITORREF               m_layoutMonitor;   // fitting a monitor other than the focused one
         PHLWORKSPACEREF             m_layoutWorkspace; // placing on a workspace that isn't showing
+
+        // While it lives, and the canvas isn't up, canvas queries are about
+        // this monitor (and the workspace it shows).
+        struct SOnMonitor {
+            SOnMonitor(CCanvas& canvas, const PHLMONITOR& monitor) : m_canvas(canvas), m_previous(canvas.m_layoutMonitor) {
+                m_canvas.m_layoutMonitor = monitor;
+            }
+            ~SOnMonitor() {
+                m_canvas.m_layoutMonitor = m_previous;
+            }
+            CCanvas&      m_canvas;
+            PHLMONITORREF m_previous;
+        };
 
         // While it lives, and the canvas isn't up, canvas queries are about
         // this workspace, on its own monitor, as if it were showing there.

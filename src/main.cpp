@@ -14,7 +14,6 @@
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/event/EventBus.hpp>
-#include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/state/WorkspaceState.hpp>
 
@@ -22,6 +21,7 @@
 
 #include "Canvas.hpp"
 #include "HotCorner.hpp"
+#include "Later.hpp"
 #include "Render.hpp"
 #include "globals.hpp"
 
@@ -298,7 +298,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
     auto& events = Event::bus()->m_events;
     g_listeners.push_back(events.render.pre.listen([](PHLMONITOR monitor) {
-        Expanse::Render::updateParking(!g_canvas.paused());
+        Expanse::Render::updateParking(!g_canvas.paused(), g_pInputManager->getMouseCoordsInternal());
         g_canvas.onPreRender(monitor);
         // While the canvas is up it swallows pointer moves, so Hyprland's
         // record of the last one stays put and it doesn't report moving back
@@ -308,6 +308,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     }));
     g_listeners.push_back(events.render.stage.listen([](eRenderStage stage) { Expanse::Render::onStage(stage); }));
     g_listeners.push_back(events.input.mouse.move.listen([CANCEL](Vector2D pos, Event::SCallbackInfo& info) {
+        // Before Hyprland picks the window under the pointer.
+        Expanse::Render::updateParking(!g_canvas.paused(), pos);
         g_hotCorner.onMouseMove(pos);
         CANCEL(g_canvas.onMouseMove(pos), info);
     }));
@@ -343,17 +345,20 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_ctlCommand = HyprlandAPI::registerHyprCtlCommand(PHANDLE, SHyprCtlCommand{.name = "expanse", .exact = false, .fn = ctlCommand});
 
     // The canvas comes back where it was, once Hyprland has finished loading us.
-    g_pEventLoopManager->doLater([] { g_canvas.restoreCanvas(); });
+    later([] { g_canvas.restoreCanvas(); });
 
     return {"expanse", "Expanse: an infinite, zoomable canvas for your windows", "Matthew Salmon", "0.3.0"};
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
+    // Nothing of ours may run once the plugin is gone: no more events first
+    // (putting windows back raises some), then nothing left waiting.
+    g_listeners.clear();
     g_hotCorner.stop();
     Expanse::Render::shutdown();
     // As quitting does on the Mac: the layout is saved, and windows go back.
     g_canvas.shutdown();
-    g_listeners.clear();
+    cancelLater();
     if (g_ctlCommand)
         HyprlandAPI::unregisterHyprCtlCommand(PHANDLE, g_ctlCommand);
     g_ctlCommand.reset();

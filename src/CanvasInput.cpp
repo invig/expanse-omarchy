@@ -70,6 +70,10 @@ namespace Expanse {
             return true;
         }
 
+        // Another monitor's own, as long as no drag started here.
+        if (!onCanvasMonitor(pos))
+            return false;
+
         const auto HOVER = windowAt(pos);
         if (HOVER != m_hover.lock()) {
             m_hover = HOVER;
@@ -167,10 +171,18 @@ namespace Expanse {
             return false;
         }
 
+        const auto POS = pointer();
+
+        // On another monitor, the click is that monitor's, and this canvas
+        // closes: it has the keyboard while it's up.
+        if (!onCanvasMonitor(POS) && m_drag.kind == SDrag::DRAG_NONE) {
+            if (pressed)
+                close();
+            return false;
+        }
+
         if (m_state == STATE_GLIDING)
             return true;
-
-        const auto POS = pointer();
 
         if (!pressed) {
             const auto DRAG = m_drag;
@@ -259,7 +271,7 @@ namespace Expanse {
     }
 
     bool CCanvas::onAxis(const IPointer::SAxisEvent& event) {
-        if (m_paused)
+        if (m_paused || (live() && !onCanvasMonitor(pointer())))
             return false;
         if (m_state == STATE_GLIDING)
             return true;
@@ -289,7 +301,7 @@ namespace Expanse {
 
     bool CCanvas::onPinchBegin() {
         m_pinchScale = 1.0;
-        if (m_paused)
+        if (m_paused || (live() && !onCanvasMonitor(pointer())))
             return false;
 
         if (m_state == STATE_GLIDING)
@@ -438,9 +450,11 @@ namespace Expanse {
         }
         // Auto-centre off means the canvas stays put, even for a window
         // entirely off screen; say where it went instead (once).
-        m_layoutMonitor = window->m_monitor;
-        const bool GONE = screenBox(window).intersection(usableArea()).empty();
-        m_layoutMonitor.reset();
+        bool GONE = false;
+        {
+            SOnMonitor here{*this, window->m_monitor.lock()};
+            GONE = screenBox(window).intersection(usableArea()).empty();
+        }
         if (GONE && m_offscreenHint.lock() != window) {
             m_offscreenHint = window;
             HyprlandAPI::addNotification(PHANDLE, std::format("{} is off-screen · Alt+` to find it", appName(window)), CHyprColor{0.54F, 0.71F, 0.98F, 1.F}, 3000);

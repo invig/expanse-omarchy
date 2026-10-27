@@ -1,13 +1,13 @@
 #define WLR_USE_UNSTABLE
 
 #include "Canvas.hpp"
+#include "Later.hpp"
 
 #include <hyprland/src/config/shared/actions/ConfigActions.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
-#include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/state/WorkspaceState.hpp>
 
@@ -129,7 +129,7 @@ namespace Expanse {
             return true;
         // Out of the event that asked for it; the canvas follows once Hyprland
         // has switched (onWorkspaceChanged), as it does for a workspace bind.
-        g_pEventLoopManager->doLater([ref = PHLWORKSPACEREF{target}] {
+        later([ref = PHLWORKSPACEREF{target}] {
             if (const auto WORKSPACE = ref.lock(); WORKSPACE && !WORKSPACE->inert())
                 (void)Config::Actions::changeWorkspace(WORKSPACE); // failing, the canvas stays where it is
         });
@@ -143,7 +143,7 @@ namespace Expanse {
             // A workspace last laid out on another screen (its monitor went
             // away, say) fits this one as it comes into view.
             if (const auto IT = m_lastScreens.find(target->m_name); IT != m_lastScreens.end())
-                g_pEventLoopManager->doLater([this, ref = PHLWORKSPACEREF{target}] {
+                later([this, ref = PHLWORKSPACEREF{target}] {
                     const auto WORKSPACE = ref.lock();
                     const auto MONITOR   = WORKSPACE ? WORKSPACE->m_monitor.lock() : nullptr;
                     if (MONITOR && MONITOR->m_activeWorkspace == WORKSPACE && !live())
@@ -153,7 +153,7 @@ namespace Expanse {
         }
         if (target->m_monitor != m_monitor || target == m_workspace.lock())
             return;
-        g_pEventLoopManager->doLater([this, ref = PHLWORKSPACEREF{target}] {
+        later([this, ref = PHLWORKSPACEREF{target}] {
             if (const auto WORKSPACE = ref.lock())
                 followWorkspace(WORKSPACE);
         });
