@@ -31,7 +31,7 @@ The canvas is remembered in `~/.local/state/expanse/layout.json` (window titles 
 
 The canvas follows you between screens: it keeps a home layout at the sizes you chose. On a smaller screen windows shrink to fit and the layout tightens, each window keeping its gap to its neighbours; back on the big screen everything returns exactly. Whatever was in the middle of the old screen stays in the middle of the new one, and a window too big for the screen shrinks to fit as you go to it.
 
-Every workspace has a canvas of its own. Zoomed out, the workspaces bar beside the minimap (Expanse's Spaces bar) shows each workspace on the monitor as a small map of its windows, the one you're on outlined; it's hidden while there's only one. Going to another workspace with the canvas up, from the bar or a workspace bind like <kbd>Super</kbd> + <kbd>2</kbd>, brings the canvas along, zoomed out, so you can pick a window there; the one you left settles where leaving it would have taken you.
+Every workspace has a canvas of its own. Zoomed out, the workspaces bar beside the minimap (Expanse's Spaces bar) shows each workspace on the monitor as its desktop picture with a small map of its windows around it, the one you're on outlined; it's hidden while there's only one. Going to another workspace with the canvas up, from the bar or a workspace bind like <kbd>Super</kbd> + <kbd>2</kbd>, brings the canvas along, zoomed out, so you can pick a window there; the one you left settles where leaving it would have taken you.
 
 New windows open in free space, next to what you were working on, instead of on top of it; if the nearest free spot is off screen, the canvas glides there. A window opened on a workspace that isn't showing gets free space on that workspace's canvas; one that opens mid-glide, or elsewhere while you're zoomed out, is placed once the canvas is back at 100%. Dialogs keep the spot their app gives them. An open menu isn't drawn on the canvas (on the Mac it closes as the canvas takes the keyboard); back at 100% it's still there.
 
@@ -106,7 +106,6 @@ Rebuild after every Hyprland update: plugins are tied to the exact Hyprland buil
 
 - **Zoomed out, keys go to the canvas, not to apps.** As on the Mac. Here it's a choice rather than a limit: the windows are live surfaces, so typing into one zoomed out could be added.
 - **Pinch is tested through Hyprland's input path, not on a touchpad.** The test VM has none; `hyprctl expanse pinch` covers everything from libinput on.
-- **Workspaces bar tiles are maps, not pictures.** Expanse shows the desktop picture or the app's icon; a tile here is a small map of the workspace's windows.
 
 ## Credits
 

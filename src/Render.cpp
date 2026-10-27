@@ -5,12 +5,15 @@
 
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
+#include <hyprland/src/desktop/view/LayerSurface.hpp>
+#include <hyprland/src/desktop/view/WLSurface.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/layout/supplementary/DragController.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/output/Monitor.hpp>
+#include <hyprland/src/protocols/core/Compositor.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/Texture.hpp>
 #include <hyprland/src/render/pass/BorderPassElement.hpp>
@@ -326,8 +329,21 @@ namespace Expanse::Render {
     // workspace (here a small map of it: the screen, its windows), the name
     // underneath. The one you're on is outlined in the accent; the one under
     // the pointer lights up.
-    static void addSpacesBar(const PHLMONITOR& monitor, const SSpacesBar& bar) {
+    // What the monitor's desktop picture (its background layer) shows now.
+    static SP<::Render::ITexture> desktopPicture(const PHLMONITOR& monitor) {
+        for (const auto& ref : monitor->m_layerSurfaceLayers[0]) {
+            const auto LAYER   = ref.lock();
+            const auto SURFACE = LAYER && LAYER->m_mapped && LAYER->wlSurface() ? LAYER->wlSurface()->resource() : nullptr;
+            if (SURFACE && SURFACE->m_current.texture)
+                return SURFACE->m_current.texture;
+        }
+        return nullptr;
+    }
+
+    static void addSpacesBar(const PHLMONITOR& monitor, const SSpacesBar& bar, bool plain) {
         const double S   = monitor->m_scale;
+        // As on the Mac, each tile shows the desktop picture (unless the canvas is plain).
+        const auto PICTURE = plain ? nullptr : desktopPicture(monitor);
         const CBox   BOX = toPixels(bar.box, monitor);
         addRect(BOX, CHyprColor{0.12F, 0.12F, 0.12F, 0.88F}, std::round(12 * S));
         addOutline(monitor, BOX, CHyprColor{1.F, 1.F, 1.F, 0.08F}, 1, std::round(12 * S));
@@ -342,7 +358,16 @@ namespace Expanse::Render {
             const float SHOWN = tile.current || tile.hovered ? 1.F : 0.85F;
             const int   ROUND = std::round(6 * S);
             addRect(TILE, CHyprColor{0.05F, 0.05F, 0.05F, SHOWN}, ROUND);
-            addRect(toPixels(tile.screen, monitor), CHyprColor{0.3F, 0.3F, 0.3F, 0.9F * SHOWN}, std::round(1.5 * S));
+            const CBox SCREEN = toPixels(tile.screen, monitor);
+            if (PICTURE && drawable(SCREEN)) {
+                CTexPassElement::SRenderData picture;
+                picture.tex   = PICTURE;
+                picture.box   = SCREEN;
+                picture.a     = SHOWN;
+                picture.round = std::round(1.5 * S);
+                add(makeUnique<CTexPassElement>(std::move(picture)));
+            } else
+                addRect(SCREEN, CHyprColor{0.3F, 0.3F, 0.3F, 0.9F * SHOWN}, std::round(1.5 * S));
             for (const auto& window : tile.windows)
                 addRect(toPixels(window, monitor), CHyprColor{0.85F, 0.85F, 0.85F, 0.8F * SHOWN}, std::round(S));
 
@@ -520,7 +545,7 @@ namespace Expanse::Render {
         if (MINIMAP)
             addMinimap(MONITOR, *MINIMAP, g_canvas.scale());
         if (SPACESBAR)
-            addSpacesBar(MONITOR, *SPACESBAR);
+            addSpacesBar(MONITOR, *SPACESBAR, PLAIN);
     }
 
     void onStage(eRenderStage stage) {
