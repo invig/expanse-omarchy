@@ -131,6 +131,7 @@ namespace Expanse {
         void                   onFocus(PHLWINDOW window, Desktop::eFocusReason reason);
         void                   onWindowOpen(PHLWINDOW window);
         void                   onWindowClose(PHLWINDOW window);
+        void                   onFullscreen(PHLWINDOW window);
         void                   onScreenChanged();
         void                   onWorkspaceChanged(PHLWORKSPACE workspace);
         void                   simulateScreen(std::optional<Vector2D> size); // debugging: pretend the screen is this size
@@ -301,6 +302,10 @@ namespace Expanse {
         std::optional<Vector2D>     m_screenOverride;
         // Until then, Hyprland is still moving windows for a monitor change.
         std::chrono::steady_clock::time_point m_settledAt;
+        // The window you were in as the screen began to change: it goes in
+        // the middle once the layout fits a screen of another size.
+        PHLWINDOWREF                m_centreAfterResize;
+        void                        centreAfterResize(const PHLWORKSPACE& workspace);
         std::vector<Store::SWindow> m_pool; // saved spots of windows not open now
         bool                        m_paused    = false;
         wl_event_source*            m_saveTimer = nullptr;
@@ -316,6 +321,10 @@ namespace Expanse {
             Fullscreen::SFullscreenMode mode;
             bool                        layoutAware = false; // which of Hyprland's handlers had it
         } m_fullscreen;
+        bool             m_ownFullscreenChange = false; // the canvas taking a window out of full screen or back
+        // A window back from full screen, which the view goes to once it's back in its box.
+        PHLWINDOWREF     m_backFromFullscreen;
+        wl_event_source* m_fullscreenTimer = nullptr;
 
         struct SDrag {
             enum eKind : uint8_t {

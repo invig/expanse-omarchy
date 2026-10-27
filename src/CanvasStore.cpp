@@ -142,6 +142,9 @@ namespace Expanse {
         if (m_animationTimer)
             wl_event_source_remove(m_animationTimer);
         m_animationTimer = nullptr;
+        if (m_fullscreenTimer)
+            wl_event_source_remove(m_fullscreenTimer);
+        m_fullscreenTimer = nullptr;
     }
 
     void CCanvas::saveNow() {

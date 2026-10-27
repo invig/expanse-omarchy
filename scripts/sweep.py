@@ -166,6 +166,10 @@ def centre(b):
     return b[0] + b[2] / 2, b[1] + b[3] / 2
 
 
+def near(p, q, tolerance=2):
+    return abs(p[0] - q[0]) <= tolerance and abs(p[1] - q[1]) <= tolerance
+
+
 def gap(a, b):
     # The space between two boxes side by side, or one above the other.
     horizontal = max(b[0] - (a[0] + a[2]), a[0] - (b[0] + b[2]))
@@ -383,16 +387,30 @@ check("pinching on the desktop zooms out with the fingers", s["state"] == "overv
 qmp("key", "esc")
 settle()
 
-# --- Follows you between screens, and back exactly.
+# --- Follows you between screens: every window fits a smaller one, the
+# window you were in goes in the middle of each, and the layout comes back exactly.
+WIN, BESIDE = APPS[1], APPS[0]
+ctl(f"focus {BESIDE}")
+settle()
+o = real()[BESIDE]
+vm(f'hyprctl dispatch "hl.dsp.window.move({{ x = {o[0] + o[2] + 40}, y = {o[1]}, window = \\"class:{WIN}\\" }})"')
+wait(1)
+vm(f'hyprctl dispatch "hl.dsp.focus({{ window = \\"class:{WIN}\\" }})"')
+settle()
 before = real()
 ctl("screen 1440 874")
 wait(2.5)
 small = real()
 fits = all(b[2] <= 1440 and b[3] <= 874 for b in small.values())
 check("on a smaller screen every window fits", fits, f"{small}")
+reserved = test_monitor()["reserved"]
+check("and the window you were in goes in its middle", near(centre(small[WIN]), (OX + reserved[0] + 720, OY + reserved[1] + 437)), f"{small[WIN]}")
 ctl("screen")
 wait(2.5)
-check("back on the big screen everything returns exactly", real() == before, f"{before} -> {real()}")
+back = real()
+around = lambda boxes: {k: (b[0] - boxes[WIN][0], b[1] - boxes[WIN][1], b[2], b[3]) for k, b in boxes.items()}
+check("back on the big screen it's in the middle, and the layout returns exactly", near(centre(back[WIN]), screen_middle()) and around(back) == around(before),
+      f"{before} -> {back}")
 
 # --- Pause puts windows back; resume brings the canvas back exactly.
 before = real()
@@ -436,6 +454,20 @@ wait(1)
 check("leaving without picking another puts it back in full screen", fs() == 2)
 vm('hyprctl dispatch "hl.dsp.window.fullscreen()"')
 wait(1)
+
+# Back from full screen, a window gets the view wherever it was (here it went
+# full screen half off screen: with auto-centre off, focus didn't move the view).
+ctl("autocentre off")
+vm(f'hyprctl dispatch "hl.dsp.window.move({{ x = {int(OX + MW) - 400}, y = {int(OY) + 300}, window = \\"class:{APPS[0]}\\" }})"')
+wait(1)
+vm(f'hyprctl dispatch "hl.dsp.focus({{ window = \\"class:{APPS[0]}\\" }})"; hyprctl dispatch "hl.dsp.window.fullscreen()"')
+wait(1.5)
+vm('hyprctl dispatch "hl.dsp.window.fullscreen()"')
+wait(1.2)
+settle()
+ctl("autocentre on")
+back = real()[APPS[0]]
+check("a window back from full screen gets the view, wherever it was", fs() == 0 and near(centre(back), screen_middle()), f"{back} {fs()}")
 
 # ===== The README's other claims.
 A, B = APPS[0], APPS[1]

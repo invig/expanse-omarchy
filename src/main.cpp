@@ -327,6 +327,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_listeners.push_back(events.window.active.listen([](PHLWINDOW window, Desktop::eFocusReason reason) { g_canvas.onFocus(window, reason); }));
     g_listeners.push_back(events.window.openLate.listen([](PHLWINDOW window) { g_canvas.onWindowOpen(window); }));
     g_listeners.push_back(events.window.close.listen([](PHLWINDOW window) { g_canvas.onWindowClose(window); }));
+    g_listeners.push_back(events.window.fullscreen.listen([](PHLWINDOW window) { g_canvas.onFullscreen(window); }));
     g_listeners.push_back(events.monitor.layoutChanged.listen([] {
         g_hotCorner.disarm();
         g_canvas.onScreenChanged();

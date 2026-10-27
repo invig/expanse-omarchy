@@ -27,6 +27,7 @@ namespace Expanse {
 
     constexpr double FIT_MARGIN     = 16.0; // around a window fitted to the screen as you go to it
     constexpr int    RELAYOUT_DELAY = 1000; // ms for a screen change to settle
+    constexpr double ROUNDING       = 2.0;  // px off a chosen size that's an app rounding, not a smaller screen
 
     static CBox goalBox(const PHLWINDOW& window) {
         return {window->position(IGeometric::GEOMETRIC_GOAL), window->size(IGeometric::GEOMETRIC_GOAL)};
@@ -54,7 +55,7 @@ namespace Expanse {
             if (!WINDOW || WINDOW->m_workspace != workspace || fullscreen(WINDOW))
                 continue;
             const auto SIZE = goalBox(WINDOW).size();
-            if (SIZE.x < entry.preferred.x - 1 || SIZE.y < entry.preferred.y - 1)
+            if (SIZE.x < entry.preferred.x - ROUNDING || SIZE.y < entry.preferred.y - ROUNDING)
                 return true;
         }
         return false;
@@ -87,7 +88,8 @@ namespace Expanse {
                     return is;
             const auto LAST    = m_lastScreens.find(workspace->m_name);
             const auto MONITOR = workspace->m_monitor.lock();
-            const bool WAITING = LAST != m_lastScreens.end() && MONITOR && LAST->second.pos() != usableAreaOf(MONITOR).pos();
+            const bool WAITING = LAST != m_lastScreens.end() && MONITOR &&
+                (LAST->second.pos() != usableAreaOf(MONITOR).pos() || LAST->second.size() != usableAreaOf(MONITOR).size());
             derived.emplace_back(workspace, WAITING || isDerived(workspace));
             return derived.back().second;
         };
@@ -174,7 +176,12 @@ namespace Expanse {
             const CBox     NOW   = goalBox(window);
             if (std::abs(SIZE.x - NOW.w) > 1 || std::abs(SIZE.y - NOW.h) > 1)
                 resizeWindow(window, SIZE);
-            sizes.push_back(goalBox(window).size());
+            // A point or two off the size you chose is the app rounding (a
+            // terminal to its cells): counted as that size, or the windows
+            // beyond it would creep a point every time the screen changes.
+            const Vector2D GOT = goalBox(window).size();
+            const bool     ROUNDED = std::abs(GOT.x - ENTRY->preferred.x) <= ROUNDING && std::abs(GOT.y - ENTRY->preferred.y) <= ROUNDING;
+            sizes.push_back(ROUNDED ? ENTRY->preferred : GOT);
         }
 
         const auto        ORIGINS = Arrange::derive(home, sizes);
@@ -193,8 +200,11 @@ namespace Expanse {
         // The screen it's laid out for now, if it hasn't been noted yet.
         if (const auto WORKSPACE = workspace(); WORKSPACE && !m_lastScreens.contains(WORKSPACE->m_name))
             m_lastScreens[WORKSPACE->m_name] = usableArea();
+        if (!m_centreAfterResize.lock())
+            m_centreAfterResize = Desktop::focusState()->window();
         m_screenOverride = size;
         relayout();
+        m_centreAfterResize.reset();
     }
 
     void CCanvas::onScreenChanged() {
@@ -204,6 +214,10 @@ namespace Expanse {
         m_settledAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(RELAYOUT_DELAY + 500);
         if (m_paused || !g_pCompositor || !g_pCompositor->m_wlEventLoop)
             return;
+        // The window you're in, before anything moves: once the layout fits
+        // the new screen, it's in the middle.
+        if (!m_centreAfterResize.lock())
+            m_centreAfterResize = Desktop::focusState()->window();
         if (!m_relayoutTimer)
             m_relayoutTimer = wl_event_loop_add_timer(
                 g_pCompositor->m_wlEventLoop,
@@ -249,14 +263,31 @@ namespace Expanse {
         if (MOVED != Vector2D{})
             m_scrolled[WORKSPACE->m_name] = SCROLL - MOVED;
 
-        if (LAST && (std::abs(LAST->w - SCREEN.w) > 0.5 || std::abs(LAST->h - SCREEN.h) > 0.5)) {
+        const bool RESIZED = LAST && (std::abs(LAST->w - SCREEN.w) > 0.5 || std::abs(LAST->h - SCREEN.h) > 0.5);
+        if (RESIZED) {
             // Whatever was in the middle of the old screen stays in the middle of the new one.
             m_scrolled[WORKSPACE->m_name] = scrolledFor(WORKSPACE) - ((SCREEN.size() - LAST->size()) / 2.0).round();
         }
 
         fitLayoutToScreen(0, false);
+        if (RESIZED)
+            centreAfterResize(WORKSPACE);
         damage();
         scheduleSave();
+    }
+
+    void CCanvas::centreAfterResize(const PHLWORKSPACE& workspace) {
+        // The window you were in goes in the middle, as on the Mac: fitting
+        // moves windows (the layout tightens on a smaller screen), so the old
+        // middle can be somewhere else now.
+        const auto WINDOW = m_centreAfterResize.lock();
+        if (!WINDOW || WINDOW->m_workspace != workspace || !isCanvasWindow(WINDOW) || fullscreen(WINDOW))
+            return;
+        const Vector2D DELTA = (goalBox(WINDOW).middle() - usableArea().middle()).round();
+        if (DELTA.size() < 0.5)
+            return;
+        m_scrolled[workspace->m_name] = scrolledFor(workspace) + DELTA;
+        fitLayoutToScreen(0, false);
     }
 
     Vector2D CCanvas::cameWith(const PHLWORKSPACE& workspace, const Vector2D& scroll, const Vector2D& moved) const {
@@ -302,5 +333,6 @@ namespace Expanse {
         for (const auto& monitor : State::monitorState()->monitors())
             if (monitor && monitor->m_enabled && monitor->m_activeWorkspace)
                 relayoutOn(monitor);
+        m_centreAfterResize.reset();
     }
 }

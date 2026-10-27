@@ -17,6 +17,8 @@
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 
+#include <wayland-server-core.h>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -32,6 +34,7 @@ namespace Expanse {
     constexpr double DIVE_SECONDS       = 0.18; // from the canvas into a window, or back
     constexpr double HOP_SECONDS        = 0.30; // at 100%
     constexpr double PAN_SECONDS        = 0.25; // on the canvas, following the highlight
+    constexpr int    BACK_FROM_FULLSCREEN_MS = 400; // for Hyprland to put a window back in its box
     constexpr double FIT_INSET          = 80.0; // canvas px around everything, when fitting
     constexpr double MIN_SCALE          = 0.03;
     constexpr double MAX_SCALE          = 1.5;
@@ -564,16 +567,46 @@ namespace Expanse {
         if (!WINDOW)
             return;
         // Through the handler that has it, which put it there: that one knows the size and spot to go back to.
-        m_fullscreen = {WINDOW, Fullscreen::controller()->getFullscreenModes(WINDOW), Fullscreen::controller()->layoutManagedFS(WINDOW)};
+        m_fullscreen          = {WINDOW, Fullscreen::controller()->getFullscreenModes(WINDOW), Fullscreen::controller()->layoutManagedFS(WINDOW)};
+        m_ownFullscreenChange = true;
         Fullscreen::controller()->setFullscreenMode(WINDOW, Fullscreen::FSMODE_NONE, Fullscreen::FSMODE_NONE, m_fullscreen.layoutAware);
+        m_ownFullscreenChange = false;
     }
 
     void CCanvas::restoreFullscreen() {
         const auto WINDOW = m_fullscreen.window.lock();
         const auto SAVED  = m_fullscreen;
         m_fullscreen      = {};
-        if (WINDOW && WINDOW->m_isMapped && WINDOW->m_workspace == m_workspace.lock())
+        if (WINDOW && WINDOW->m_isMapped && WINDOW->m_workspace == m_workspace.lock()) {
+            m_ownFullscreenChange = true;
             Fullscreen::controller()->setFullscreenMode(WINDOW, SAVED.mode.internal, SAVED.mode.client, SAVED.layoutAware);
+            m_ownFullscreenChange = false;
+        }
+    }
+
+    void CCanvas::onFullscreen(PHLWINDOW window) {
+        // A window back from full screen (or maximised) is what you're
+        // looking at, with the keyboard, wherever the view has got to
+        // meanwhile: the view goes to it, as on the Mac, once it's back in its
+        // box. Not when the canvas takes it out of full screen or back.
+        if (m_paused || m_ownFullscreenChange || live() || !window || Fullscreen::controller()->isFullscreen(window) || !g_pCompositor ||
+            !g_pCompositor->m_wlEventLoop)
+            return;
+        m_backFromFullscreen = window;
+        if (!m_fullscreenTimer)
+            m_fullscreenTimer = wl_event_loop_add_timer(
+                g_pCompositor->m_wlEventLoop,
+                [](void* data) {
+                    auto*      canvas = sc<CCanvas*>(data);
+                    const auto WINDOW = canvas->m_backFromFullscreen.lock();
+                    canvas->m_backFromFullscreen.reset();
+                    if (WINDOW && !canvas->m_paused && !canvas->live() && WINDOW->m_isMapped && !Fullscreen::controller()->isFullscreen(WINDOW) && WINDOW->m_workspace &&
+                        WINDOW->m_workspace->isVisible())
+                        canvas->glideTo(WINDOW);
+                    return 0;
+                },
+                this);
+        wl_event_source_timer_update(m_fullscreenTimer, BACK_FROM_FULLSCREEN_MS);
     }
 
     PHLWINDOW CCanvas::topWindowInView(PHLWINDOW excluding) const {
