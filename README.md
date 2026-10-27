@@ -33,7 +33,9 @@ The canvas follows you between screens: it keeps a home layout at the sizes you 
 
 Every workspace has a canvas of its own. Zoomed out, the workspaces bar beside the minimap (Expanse's Spaces bar) shows each workspace on the monitor as a small map of its windows, the one you're on outlined; it's hidden while there's only one. Going to another workspace with the canvas up, from the bar or a workspace bind like <kbd>Super</kbd> + <kbd>2</kbd>, brings the canvas along, zoomed out, so you can pick a window there; the one you left settles where leaving it would have taken you.
 
-New windows open in free space, next to what you were working on, instead of on top of it; if the nearest free spot is off screen, the canvas glides there. Dialogs keep the spot their app gives them.
+New windows open in free space, next to what you were working on, instead of on top of it; if the nearest free spot is off screen, the canvas glides there. A window opened on a workspace that isn't showing gets free space on that workspace's canvas. Dialogs keep the spot their app gives them.
+
+With several monitors, each shows its workspace's canvas, with its own minimap and workspaces bar, and zooms out on its own. A canvas reaches past its monitor's edges, over its neighbours', but a window parked there is neither drawn on the neighbour nor clickable there; keyboard focus still reaches it and centres it on its own monitor. Each workspace remembers the screen it was laid out for, so following you between screens works per monitor, and a workspace that moves to another monitor (when one is unplugged, say) keeps its windows where they were on the screen. Expanse on the Mac manages one display.
 
 The keys after the first three work on the canvas (zoomed out, or after scrolling on the desktop). <kbd>Super</kbd> stands in for the Mac's <kbd>⌘</kbd> and <kbd>Ctrl</kbd>, so <kbd>Super</kbd> + <kbd>W</kbd> on the canvas closes the hovered window instead of the focused one.
 
@@ -51,6 +53,7 @@ A full-screen (or maximised) window sits outside the canvas, as a full-screen ap
 - **At 100%, windows are real.** Every window on the canvas workspace floats where the canvas puts it, off-screen included. Zooming out floats tiled windows where they are. Input, focus, popups and X11 apps all stay native.
 - **Zoomed out, windows are drawn through the camera.** No function hooks: Hyprland's only work on x86_64. At the start of each frame the plugin hides the canvas windows from Hyprland's own pass. After Hyprland's windows, it draws each one where the camera puts it, by giving it that box as its current (animated) geometry until the frame is drawn, the way Hyprland draws a window mid-animation, then restores it. The desktop is dimmed underneath; the bar stays on top. Pointer and keys go to the canvas, not to apps.
 - **On the canvas, windows are arranged for real.** Dragging, snapping and tidying move the real windows (still drawn through the camera), so there's nothing to reconcile when you leave. The snapping, tidy-up and placement rules are Expanse's, ported line for line.
+- **Drawn as Expanse draws them.** Zoomed out, every window has Expanse's soft shadow, in canvas units so it shrinks with the window. Hyprland lays its decorations out for a window's real box, so the windows are drawn without them and each gets its theme border, in its colours, where the camera puts it; during a glide too.
 - **Gliding** animates the camera (geometric zoom, straight-line pan of the view's centre), then moves every real window once so the camera is back at 100%, and focuses the picked window. A hop at 100% is the same glide without the zoom: for 0.3 s every window is drawn through the camera.
 
 ## Build and load
@@ -77,17 +80,34 @@ The hot corner is `plugin:expanse:hot_corner`: `bottom` (both bottom corners, th
 hl.config({ plugin = { expanse = { hot_corner = "all", wallpaper = false } } })
 ```
 
+Those are defaults. As on the Mac, a choice made from the menu below (or `hyprctl expanse corner …` and `wallpaper …`) is saved with the canvas and wins over the config until you pick `default`.
+
+### In Omarchy's menu
+
+Expanse's menu bar icon on the Mac becomes a submenu of Omarchy's menu (<kbd>Super</kbd> + <kbd>Alt</kbd> + <kbd>Space</kbd>): zoom out, tidy up, restore all windows, auto-centre, the desktop picture, pause, the hot corner, and a list of the canvas's keys. Toggles show a ✓ when on. Paste the rows from [examples/omarchy-menu.jsonc](examples/omarchy-menu.jsonc) into `~/.config/omarchy/extensions/omarchy-menu.jsonc`, then:
+
+```sh
+omarchy menu refresh
+```
+
 `hyprpm` isn't installed on Omarchy; [hyprpm.toml](hyprpm.toml) is ready for when it is (`hyprpm add <this repo>`, `hyprpm enable expanse`).
 
 Rebuild after every Hyprland update: plugins are tied to the exact Hyprland build.
 
 ## Scripting and tests
 
-`hyprctl expanse` prints the canvas as JSON. `hyprctl expanse` with `toggle`, `open`, `close`, `tidy`, `fit`, `zoom <scale>`, `pan <dx> <dy>`, `hop <left|right|up|down>`, `focus <app>` (or `focus address:0x…`, from `hyprctl clients`), `space <name>` (that workspace's canvas, zoomed out), `select all`, `restore` (every window back into view), `pause`, `resume`, `autocentre <on|off>` or, for debugging, `screen <w> <h>` (pretend the screen is that size; no size for the real one) drives it, and `pick <x> <y>` clicks the canvas at a global logical point. In Lua, `hl.plugin.expanse.pause()` toggles pausing and `restore()` brings windows back into view.
+`hyprctl expanse` prints the canvas as JSON. `hyprctl expanse` with `toggle`, `open`, `close`, `tidy`, `fit`, `zoom <scale>`, `pan <dx> <dy>`, `hop <left|right|up|down>`, `focus <app>` (or `focus address:0x…`, from `hyprctl clients`), `space <name>` (that workspace's canvas, zoomed out), `select all`, `restore` (every window back into view), `pause [toggle]`, `resume`, `autocentre <on|off|toggle>`, `wallpaper <on|off|toggle|default>`, `corner [<corner>|default]` (no corner prints the hot corner's state) or `keys` (the canvas's keys) drives it, and `pick <x> <y>` clicks the canvas at a global logical point. For debugging, `screen <w> <h>` pretends the screen is that size (no size for the real one), and `pinch <scale>…` sends a two-finger pinch through Hyprland's own input path, as a touchpad would. In Lua, `hl.plugin.expanse.pause()` toggles pausing and `restore()` brings windows back into view.
 
 `make test` checks the nearest-window rule and the layout file case by case. The nearest-window rule, snapping, tidy-up, free-space placement and the layout for a smaller screen were also checked against Expanse's own Swift on thousands of random layouts, with no differences.
 
-[scripts/vm.sh](scripts/vm.sh) syncs, builds and reloads the plugin in a Try Omarchy VM over SSH. [scripts/qmp-input.py](scripts/qmp-input.py) presses keys and moves and clicks the VM's real pointer through QEMU's QMP socket; a virtual keyboard (`wtype`) can't trigger Hyprland keybinds.
+[scripts/vm.sh](scripts/vm.sh) syncs, builds and reloads the plugin in a Try Omarchy VM over SSH. [scripts/qmp-input.py](scripts/qmp-input.py) presses keys and moves and clicks the VM's real pointer through QEMU's QMP socket; a virtual keyboard (`wtype`) can't trigger Hyprland keybinds. `hyprctl output create headless` adds a second monitor to test with (the QMP pointer reaches it), and `hyprctl output remove` unplugs it.
+
+## Limitations
+
+- **Zoomed out, keys go to the canvas, not to apps.** As on the Mac. Here it's a choice rather than a limit: the windows are live surfaces, so typing into one zoomed out could be added.
+- **Pinch is tested through Hyprland's input path, not on a touchpad.** The test VM has none; `hyprctl expanse pinch` covers everything from libinput on.
+- **Workspaces bar tiles are maps, not pictures.** Expanse shows the desktop picture or the app's icon; a tile here is a small map of the workspace's windows.
+- **A window opened while the canvas is up, on a workspace other than the canvas's,** lands where Hyprland puts it.
 
 ## Credits
 
