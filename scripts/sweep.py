@@ -90,7 +90,21 @@ def zoom_out(timeout=8):
     return False
 
 
+SCREENS = {}
+
+
+def screen_size():
+    return tuple((m["name"], m["width"], m["height"]) for m in json.loads(vm("hyprctl monitors -j")) if m["name"] == "Virtual-1")
+
+
 def check(name, ok, detail=""):
+    # The VM's screen follows its window on the Mac: if that changed size
+    # mid-run, the canvas rightly moved everything, and what follows can't be
+    # compared. Say so, and stop.
+    size = screen_size()
+    if SCREENS.setdefault("start", size) != size:
+        print(f"STOP  the VM's screen changed size during the run ({SCREENS['start']} -> {size}): leave its window alone and run again")
+        sys.exit(100)
     print(f"{'PASS' if ok else 'FAIL'}  {name}{'  (' + detail + ')' if detail and not ok else ''}")
     if not ok:
         failed.append(name)
@@ -709,7 +723,7 @@ check("Super + A selects every window", all(v["selected"] for v in mine().values
 qmp("key", "esc", "sleep", 400)
 
 # Minimap drag; right-click goes back to 100%.
-m = ctl()["minimap"]
+m = ctl()["minimap"] or [W - 224, H - 152, 208, 136]
 start = (m[0] + 40, m[1] + 40)
 point(*start)
 qmp("press", "sleep", 200)
