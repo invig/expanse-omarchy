@@ -13,6 +13,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
+#include <filesystem>
 
 // The workspaces bar, Expanse's Spaces bar: every workspace on the canvas's
 // monitor beside the minimap. Each workspace has a canvas of its own; going to
@@ -32,12 +34,29 @@ namespace Expanse {
         return {window->position(IGeometric::GEOMETRIC_GOAL), window->size(IGeometric::GEOMETRIC_GOAL)};
     }
 
-    // "3" → "Workspace 3"; named workspaces keep their name.
+    // Omarchy gives each monitor workspaces 1-10 of its own (41-50 on the
+    // fifth, say), Super + 1-0 on that monitor, and its bar shows them as
+    // 1-10. Its file of which monitor has which block says it does.
+    static bool perMonitorWorkspaces() {
+        static const bool OMARCHY = [] {
+            const char*       STATE = std::getenv("XDG_STATE_HOME");
+            const char*       HOME  = std::getenv("HOME");
+            const std::string DIR   = STATE && *STATE ? std::string{STATE} : std::string{HOME ? HOME : ""} + "/.local/state";
+            std::error_code   error;
+            return std::filesystem::exists(DIR + "/omarchy/monitor-workspaces", error);
+        }();
+        return OMARCHY;
+    }
+
+    // "3" → "Workspace 3" (47 → "Workspace 7" with Omarchy's numbering); named
+    // workspaces keep their name.
     static std::string spaceName(const PHLWORKSPACE& workspace) {
         const auto& NAME = workspace->m_name;
-        if (!NAME.empty() && std::ranges::all_of(NAME, [](unsigned char c) { return std::isdigit(c); }))
-            return "Workspace " + NAME;
-        return NAME;
+        if (NAME.empty() || !std::ranges::all_of(NAME, [](unsigned char c) { return std::isdigit(c); }))
+            return NAME;
+        if (perMonitorWorkspaces() && workspace->m_id > 0)
+            return "Workspace " + std::to_string((workspace->m_id - 1) % 10 + 1);
+        return "Workspace " + NAME;
     }
 
     std::optional<size_t> SSpacesBar::tileAt(const Vector2D& pos) const {

@@ -28,6 +28,29 @@ namespace Expanse {
     constexpr size_t SAVED_CLOSED = 60; // spots kept for windows that aren't open
     constexpr int    SAVE_DELAY   = 1000; // ms after the last change
 
+    using Renames = std::vector<std::pair<std::string, std::string>>; // old name, new name
+
+    // State kept by workspace name, moved to the new names. All taken out,
+    // then all put back: two workspaces can swap names.
+    template <typename T>
+    static void rename(std::unordered_map<std::string, T>& state, const Renames& renames) {
+        std::vector<std::pair<std::string, T>> moving;
+        for (const auto& [from, to] : renames)
+            if (const auto IT = state.find(from); IT != state.end()) {
+                moving.emplace_back(to, IT->second);
+                state.erase(IT);
+            }
+        for (auto& [to, value] : moving)
+            state[to] = value;
+    }
+
+    // A window still open (the plugin reloaded): its own entry.
+    static auto exactEntry(std::vector<Store::SWindow>& pool, const PHLWINDOW& window) {
+        return std::ranges::find_if(pool, [&](const Store::SWindow& e) {
+            return e.address == reinterpret_cast<uint64_t>(window.get()) && e.pid == window->getPID() && e.app == window->m_initialClass;
+        });
+    }
+
     static CBox goalBox(const PHLWINDOW& window) {
         return {window->position(IGeometric::GEOMETRIC_GOAL), window->size(IGeometric::GEOMETRIC_GOAL)};
     }
@@ -67,7 +90,7 @@ namespace Expanse {
         // whose monitor goes away can come back as another number): its state
         // goes with it.
         std::erase_if(m_workspaceNames, [](const auto& seen) { return !seen.first.lock(); });
-        std::vector<std::pair<std::string, std::string>> renames; // old, new
+        Renames renames;
         for (const auto& ref : State::workspaceState()->workspaces()) {
             const auto WORKSPACE = ref.lock();
             if (!WORKSPACE || WORKSPACE->inert())
@@ -80,19 +103,8 @@ namespace Expanse {
                 IT->second = WORKSPACE->m_name;
             }
         }
-        // All taken out, then all put back: two workspaces can swap names.
-        const auto MOVE = [&](auto& state) {
-            std::vector<std::pair<std::string, typename std::decay_t<decltype(state)>::mapped_type>> moving;
-            for (const auto& [from, to] : renames)
-                if (const auto IT = state.find(from); IT != state.end()) {
-                    moving.emplace_back(to, IT->second);
-                    state.erase(IT);
-                }
-            for (auto& [to, value] : moving)
-                state[to] = value;
-        };
-        MOVE(m_scrolled);
-        MOVE(m_lastScreens);
+        rename(m_scrolled, renames);
+        rename(m_lastScreens, renames);
 
         // A window moved to another workspace (a bind, say) has its spot on
         // that workspace's canvas where it is now.
@@ -182,7 +194,7 @@ namespace Expanse {
         const int64_t  PID     = window->getPID();
         std::optional<Store::SWindow> match;
         if (exactOnly) {
-            const auto IT = std::ranges::find_if(m_pool, [&](const Store::SWindow& e) { return e.address == ADDRESS && e.pid == PID && e.app == window->m_initialClass; });
+            const auto IT = exactEntry(m_pool, window);
             if (IT != m_pool.end()) {
                 match = *IT;
                 m_pool.erase(IT);
@@ -244,6 +256,20 @@ namespace Expanse {
         for (const auto& [name, offset] : LAYOUT->scrolled)
             m_scrolled[name] = offset;
         m_pool = LAYOUT->windows;
+
+        // A workspace can come back under another name: unloading reloads
+        // Hyprland's config, which can number a monitor's workspaces afresh.
+        // Its open windows say what it's called now; its scroll goes with it.
+        Renames renames;
+        for (const auto& window : Desktop::windowState()->windows()) {
+            if (!onCanvasWorkspace(window))
+                continue;
+            const auto        IT  = exactEntry(m_pool, window);
+            const std::string NOW = window->m_workspace->m_name;
+            if (IT != m_pool.end() && IT->workspace != NOW && !std::ranges::contains(renames, std::pair{IT->workspace, NOW}))
+                renames.emplace_back(IT->workspace, NOW);
+        }
+        rename(m_scrolled, renames);
 
         // Windows still open (the plugin reloaded) find their exact entry
         // first, so two windows of one app don't swap spots; then the rest by
