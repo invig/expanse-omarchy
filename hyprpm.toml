@@ -4,6 +4,7 @@ authors = ["Matthew Salmon"]
 
 [expanse]
 description = "Expanse: an infinite, zoomable canvas for your windows"
+version = "0.3.0"
 authors = ["Matthew Salmon"]
 output = "expanse.so"
 build = [

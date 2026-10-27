@@ -90,7 +90,16 @@ Expanse's menu bar icon on the Mac becomes a submenu of Omarchy's menu (<kbd>Sup
 omarchy menu refresh
 ```
 
-`hyprpm` isn't installed on Omarchy; [hyprpm.toml](hyprpm.toml) is ready for when it is (`hyprpm add <this repo>`, `hyprpm enable expanse`).
+Or with `hyprpm` (on Omarchy, `sudo pacman -S hyprpm` first): it builds the plugin against the headers of the Hyprland you're running and loads it.
+
+```sh
+hyprpm update
+hyprpm add <this repository>
+hyprpm enable expanse
+hyprpm reload -n
+```
+
+Then load it at login with `hyprpm reload -n` instead of `hl.plugin.load` (use one or the other: `hyprpm reload` unloads a plugin it doesn't manage). Keep the `dofile` line: Hyprland reads the config again once the plugin is loaded, and that's when the binds take.
 
 Rebuild after every Hyprland update: plugins are tied to the exact Hyprland build.
 

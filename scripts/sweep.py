@@ -929,6 +929,8 @@ second = next(m for m in json.loads(vm("hyprctl monitors -j")) if m["name"] == "
 sx, sy = second["x"], second["y"]
 sw, sh = second["width"] / second["scale"], second["height"] / second["scale"]
 point(W / 4, H / 2)
+refused = vm(f"hyprctl expanse space {second['activeWorkspace']['name']}")
+check("hyprctl expanse space refuses another monitor's workspace", "isn't on the canvas's monitor" in refused and ctl()["state"] == "idle", refused.strip())
 focus(B)
 settle()
 r = real()
@@ -971,6 +973,36 @@ vm("hyprctl output remove SWEEP-2")
 wait(2)
 W, H = layout()
 point(W / 2, H / 2)
+
+# ===== Edge cases.
+# The workspaces bar fits beside the minimap however many workspaces there are.
+EXTRA = [f"name:edge{i}" for i in range(26)]
+for name in EXTRA:
+    vm(f'hyprctl dispatch "hl.dsp.exec_cmd(\\"foot --app-id=sweep-edge-{RUN} sleep infinity\\", {{ workspace = \\"{name} silent\\", float = true, size = \\"400 300\\" }})"')
+wait(6)
+zoom_out()
+s = ctl()
+tiles = [t["tile"] for t in s["spaces"]]
+m = s["minimap"]
+check("the workspaces bar fits beside the minimap with 30 workspaces", len(tiles) >= 28 and min(t[0] for t in tiles) >= 16 and max(t[0] + t[2] for t in tiles) <= m[0] - 12,
+      f"{len(tiles)} tiles from {min(t[0] for t in tiles) if tiles else None} to {max(t[0] + t[2] for t in tiles) if tiles else None}, minimap at {m}")
+qmp("key", "esc")
+settle()
+for c in clients():
+    if c["class"] == f"sweep-edge-{RUN}":
+        vm(f"kill {c['pid']}")
+wait(1.5)
+
+# A workspace bind right as a glide ends: you stay on the workspace you went to.
+stayed = []
+for i, delay in enumerate((0.1, 0.18, 0.25, 0.3, 0.35, 0.42, 0.5)):
+    focus(A)
+    settle()
+    qmp("key", "meta_l+right" if i % 2 == 0 else "meta_l+left", "sleep", int(delay * 1000), "key", f"meta_l+{other}", "sleep", 2500)
+    stayed.append(json.loads(vm("hyprctl activeworkspace -j"))["name"] == other)
+    qmp("key", f"meta_l+{WORKSPACE}", "sleep", 1500)
+    settle()
+check("a workspace bind as a glide ends never bounces back", all(stayed), f"{stayed}")
 
 # ===== Unloading in the middle of things.
 UNLOAD = "hyprctl plugin unload ~/expanse-hypr/expanse.so >/dev/null; hyprctl plugin load ~/expanse-hypr/expanse.so >/dev/null"
