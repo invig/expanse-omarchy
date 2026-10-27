@@ -1,6 +1,7 @@
 #define WLR_USE_UNSTABLE
 
 #include "Canvas.hpp"
+#include "HotCorner.hpp"
 
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
@@ -707,6 +708,22 @@ namespace Expanse {
         return m_autoCentre;
     }
 
+    void CCanvas::setWallpaper(std::optional<bool> on) {
+        m_wallpaper = on;
+        damage();
+        scheduleSave();
+    }
+
+    bool CCanvas::wallpaper() const {
+        static auto PWALLPAPER = CConfigValue<Config::BOOL>("plugin:expanse:wallpaper");
+        return m_wallpaper.value_or(*PWALLPAPER);
+    }
+
+    void CCanvas::setHotCorner(std::optional<std::string> corner) {
+        g_hotCorner.choice = std::move(corner);
+        scheduleSave();
+    }
+
     std::vector<PHLWINDOW> CCanvas::selection() const {
         std::vector<PHLWINDOW> out;
         for (const auto& ref : m_selected)
@@ -1021,9 +1038,9 @@ namespace Expanse {
         const auto TARGET    = m_target.lock();
         const auto WORKSPACE = workspace();
         const auto SCROLLED  = scrolledFor(WORKSPACE);
-        return std::format(R"({{"state":"{}","paused":{},"workspace":"{}","scale":{:.3f},"origin":[{:.1f},{:.1f}],"scrolled":[{:.1f},{:.1f}],"autoCentre":{},"hover":"{}","target":"{}","windows":[{}],"spaces":[{}]}})",
+        return std::format(R"({{"state":"{}","paused":{},"workspace":"{}","scale":{:.3f},"origin":[{:.1f},{:.1f}],"scrolled":[{:.1f},{:.1f}],"autoCentre":{},"wallpaper":{},"hotCorner":"{}","hover":"{}","target":"{}","windows":[{}],"spaces":[{}]}})",
                            STATES[m_state], m_paused, WORKSPACE ? jsonEscape(WORKSPACE->m_name) : "", m_camera.scale, m_camera.origin.x, m_camera.origin.y, SCROLLED.x,
-                           SCROLLED.y, m_autoCentre, HOVER ? jsonEscape(HOVER->m_title) : "", TARGET ? jsonEscape(TARGET->m_title) : "", windows, spaces) +
+                           SCROLLED.y, m_autoCentre, wallpaper(), jsonEscape(g_hotCorner.corner()), HOVER ? jsonEscape(HOVER->m_title) : "", TARGET ? jsonEscape(TARGET->m_title) : "", windows, spaces) +
             "\n";
     }
 

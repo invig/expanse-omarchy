@@ -3,6 +3,7 @@
 #include <hyprutils/math/Vector2D.hpp>
 
 #include <functional>
+#include <optional>
 #include <string>
 
 struct wl_event_source;
@@ -16,6 +17,9 @@ namespace Expanse {
     class CHotCorner {
       public:
         std::function<void()> onTrigger;
+        // Picked from the menu (saved with the canvas); without one, the config value.
+        std::optional<std::string> choice;
+        std::string                corner() const;
 
         void                  onMouseMove(const Hyprutils::Math::Vector2D& pos);
         void                  onButton(bool pressed);

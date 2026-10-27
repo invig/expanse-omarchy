@@ -1,6 +1,7 @@
 #define WLR_USE_UNSTABLE
 
 #include "Canvas.hpp"
+#include "HotCorner.hpp"
 
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
@@ -133,6 +134,8 @@ namespace Expanse {
 
         Store::SLayout layout;
         layout.autoCentre = m_autoCentre;
+        layout.hotCorner  = g_hotCorner.choice;
+        layout.wallpaper  = m_wallpaper;
         for (const auto& [name, offset] : m_scrolled)
             layout.scrolled.emplace_back(name, offset);
 
@@ -231,7 +234,9 @@ namespace Expanse {
         if (!LAYOUT)
             return;
 
-        m_autoCentre = LAYOUT->autoCentre;
+        m_autoCentre       = LAYOUT->autoCentre;
+        m_wallpaper        = LAYOUT->wallpaper;
+        g_hotCorner.choice = LAYOUT->hotCorner;
         for (const auto& [name, offset] : LAYOUT->scrolled)
             m_scrolled[name] = offset;
         m_pool = LAYOUT->windows;

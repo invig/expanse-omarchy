@@ -94,15 +94,37 @@ static int luaHop(lua_State* L) {
     return 1;
 }
 
-static constexpr const char* USAGE = "usage: hyprctl expanse [state | toggle | open | close | hop <left|right|up|down> | focus <app> | pick <x> <y> | space <name> | tidy | fit | "
-                                     "zoom <scale> | pan <dx> <dy> | select all | restore | pause | resume | autocentre <on|off>]\n";
+static constexpr const char* USAGE =
+    "usage: hyprctl expanse [state | toggle | open | close | hop <left|right|up|down> | focus <app> | pick <x> <y> | space <name> | tidy | fit | zoom <scale> | "
+    "pan <dx> <dy> | select all | restore | pause [toggle] | resume | autocentre <on|off|toggle> | wallpaper <on|off|toggle|default> | "
+    "corner [off|all|bottom|top_left|top_right|bottom_left|bottom_right|default] | keys]\n";
+
+// The canvas's own keys (binds are in Omarchy's key guide), for the menu's Shortcuts.
+static constexpr const char* KEYS = R"(Expanse
+  Alt + `                  zoom out to every window, and back
+  Super + arrows           glide to the nearest window that way
+  rest in a bottom corner  zoom out (hyprctl expanse corner ...)
+
+Zoomed out
+  click a window           glide to it at 100%
+  arrows, Return           move the highlight, dive into it
+  scroll, middle-drag      pan;  Space + drag pans too
+  Super + scroll, pinch    zoom around the pointer
+  0  1  -  =               fit everything, 100%, zoom out, zoom in
+  drag a window            move it (snaps; hold Super to stop snapping)
+  drag empty canvas        select; Shift-click adds; Super + A selects all
+  T                        tidy up
+  Super + W, hover x       close the hovered or selected windows
+  minimap, workspaces bar  click to go there
+  Esc, right-click         clear the selection, then back to 100%
+)";
 
 static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
     std::istringstream words{request};
     std::string        name, verb;
     words >> name >> verb;
 
-    if (verb.empty() || verb == "state" || verb == "corner")
+    if (verb.empty() || verb == "state")
         ;
     else if (verb == "toggle")
         g_canvas.toggle();
@@ -114,10 +136,41 @@ static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
         g_canvas.tidy();
     else if (verb == "restore")
         g_canvas.restoreOffscreen();
-    else if (verb == "pause")
-        g_canvas.pause();
-    else if (verb == "resume")
+    else if (verb == "pause") {
+        std::string word;
+        words >> word;
+        if (word == "toggle" && g_canvas.paused())
+            g_canvas.resume();
+        else
+            g_canvas.pause();
+    } else if (verb == "resume")
         g_canvas.resume();
+    else if (verb == "keys")
+        return KEYS;
+    else if (verb == "corner") {
+        // Which corners zoom out, as the Mac's menu: saved, and over the config value until "default".
+        std::string word;
+        words >> word;
+        static const std::vector<std::string> CORNERS = {"off", "all", "bottom", "top_left", "top_right", "bottom_left", "bottom_right"};
+        if (word == "default")
+            g_canvas.setHotCorner(std::nullopt);
+        else if (std::ranges::contains(CORNERS, word))
+            g_canvas.setHotCorner(word);
+        else if (!word.empty())
+            return USAGE;
+    } else if (verb == "wallpaper") {
+        // The desktop picture behind the canvas, or a plain background; saved, as "corner".
+        std::string word;
+        words >> word;
+        if (word == "on" || word == "off")
+            g_canvas.setWallpaper(word == "on");
+        else if (word == "toggle")
+            g_canvas.setWallpaper(!g_canvas.wallpaper());
+        else if (word == "default")
+            g_canvas.setWallpaper(std::nullopt);
+        else
+            return USAGE;
+    }
     else if (verb == "focus") {
         // The newest window whose app matches, as expanse://focus?app= on the
         // Mac; or, as ?id=, one window by its address (from hyprctl clients).
@@ -186,9 +239,12 @@ static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
     } else if (verb == "autocentre" || verb == "autocenter") {
         std::string word;
         words >> word;
-        if (word != "on" && word != "off")
+        if (word == "toggle")
+            g_canvas.setAutoCentre(!g_canvas.autoCentre());
+        else if (word == "on" || word == "off")
+            g_canvas.setAutoCentre(word == "on");
+        else
             return USAGE;
-        g_canvas.setAutoCentre(word == "on");
     } else
         return USAGE;
 

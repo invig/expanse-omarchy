@@ -16,9 +16,13 @@ namespace Expanse {
     constexpr double TOLERANCE = 3.0;  // logical px from the very corner
     constexpr int    DWELL_MS  = 60;   // resting there this long
 
-    bool CHotCorner::inCorner(const Vector2D& pos) const {
+    std::string CHotCorner::corner() const {
         static auto PCORNER = CConfigValue<Config::STRING>("plugin:expanse:hot_corner");
-        const std::string CORNER = *PCORNER;
+        return choice.value_or(std::string{*PCORNER});
+    }
+
+    bool CHotCorner::inCorner(const Vector2D& pos) const {
+        const std::string CORNER = corner();
         if (CORNER == "off")
             return false;
 
@@ -80,7 +84,8 @@ namespace Expanse {
     }
 
     std::string CHotCorner::describe() const {
-        return std::format(R"({{"armed":{},"buttons":{},"waiting":{},"inCorner":{}}})", m_armed, m_buttons, m_dwell != nullptr, inCorner(m_pos));
+        return std::format(R"({{"corner":"{}","chosen":{},"armed":{},"buttons":{},"waiting":{},"inCorner":{}}})", corner(), choice.has_value(), m_armed, m_buttons,
+                           m_dwell != nullptr, inCorner(m_pos));
     }
 
     void CHotCorner::stop() {

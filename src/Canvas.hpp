@@ -105,6 +105,9 @@ namespace Expanse {
         void                   closeWindows(const std::vector<PHLWINDOW>& windows);
         void                   setAutoCentre(bool on);
         bool                   autoCentre() const;
+        void                   setWallpaper(std::optional<bool> on); // nullopt: the config value
+        bool                   wallpaper() const;
+        void                   setHotCorner(std::optional<std::string> corner);
         void                   restoreOffscreen(); // every window back in view
 
         // Remembering the canvas (CanvasStore.cpp)
@@ -240,6 +243,7 @@ namespace Expanse {
         bool                   m_animating    = false;
         bool                   m_fromKeyboard = false; // the glide lands like Hyprland's movefocus
         bool                   m_autoCentre   = true;
+        std::optional<bool>    m_wallpaper;
         SCamera                m_camera;
         SCamera                m_from;
         SCamera                m_to;

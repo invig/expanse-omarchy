@@ -35,6 +35,8 @@ namespace Expanse::Store {
 
         SLayout layout;
         layout.autoCentre = ROOT->boolean("autoCentre").value_or(true);
+        layout.hotCorner  = ROOT->string("hotCorner");
+        layout.wallpaper  = ROOT->boolean("wallpaper");
         if (const auto* SCROLLED = ROOT->array("scrolled"))
             for (const auto& entry : *SCROLLED)
                 if (const auto WS = entry.string("workspace"); WS && entry.number("x") && entry.number("y"))
@@ -61,7 +63,12 @@ namespace Expanse::Store {
     }
 
     void save(const SLayout& layout) {
-        std::string out = std::format("{{\n  \"version\": 1,\n  \"autoCentre\": {},\n  \"scrolled\": [", layout.autoCentre);
+        std::string out = std::format("{{\n  \"version\": 1,\n  \"autoCentre\": {},", layout.autoCentre);
+        if (layout.hotCorner)
+            out += std::format("\n  \"hotCorner\": {},", Json::quote(*layout.hotCorner));
+        if (layout.wallpaper)
+            out += std::format("\n  \"wallpaper\": {},", *layout.wallpaper);
+        out += "\n  \"scrolled\": [";
         for (size_t i = 0; i < layout.scrolled.size(); ++i)
             out += std::format("{}\n    {{\"workspace\": {}, \"x\": {}, \"y\": {}}}", i ? "," : "", Json::quote(layout.scrolled[i].first), layout.scrolled[i].second.x,
                                layout.scrolled[i].second.y);

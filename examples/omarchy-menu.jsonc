@@ -1,0 +1,21 @@
+{
+  // Expanse in the Omarchy menu (Super + Alt + Space), as its menu bar icon on
+  // the Mac. Paste these rows into ~/.config/omarchy/extensions/omarchy-menu.jsonc,
+  // then run `omarchy menu refresh`. Choices made here are saved with the canvas.
+  "expanse": {"icon": "", "label": "Expanse", "description": "Your windows on an infinite canvas"},
+  "expanse.zoom": {"icon": "", "label": "Zoom Out", "action": "hyprctl expanse toggle"},
+  "expanse.tidy": {"icon": "", "label": "Tidy Up", "action": "hyprctl expanse tidy"},
+  "expanse.restore": {"icon": "", "label": "Restore All", "description": "Every window back into view", "action": "hyprctl expanse restore"},
+  "expanse.centre": {"icon": "", "label": "Auto-Centre", "description": "Centre a window you go to from the keyboard", "action": "hyprctl expanse autocentre toggle", "checked": "hyprctl expanse | jq -e .autoCentre"},
+  "expanse.picture": {"icon": "", "label": "Background", "description": "The desktop picture behind the canvas", "action": "hyprctl expanse wallpaper toggle", "checked": "hyprctl expanse | jq -e .wallpaper"},
+  "expanse.pause": {"icon": "", "label": "Pause", "description": "Windows back where they were before the canvas", "action": "hyprctl expanse pause toggle", "checked": "hyprctl expanse | jq -e .paused"},
+  "expanse.corner": {"icon": "", "label": "Hot Corner"},
+  "expanse.corner.bottom": {"label": "Bottom", "action": "hyprctl expanse corner bottom", "checked": "hyprctl expanse corner | jq -e '.corner == \"bottom\"'"},
+  "expanse.corner.all": {"label": "All", "action": "hyprctl expanse corner all", "checked": "hyprctl expanse corner | jq -e '.corner == \"all\"'"},
+  "expanse.corner.top_left": {"label": "Top Left", "action": "hyprctl expanse corner top_left", "checked": "hyprctl expanse corner | jq -e '.corner == \"top_left\"'"},
+  "expanse.corner.top_right": {"label": "Top Right", "action": "hyprctl expanse corner top_right", "checked": "hyprctl expanse corner | jq -e '.corner == \"top_right\"'"},
+  "expanse.corner.bottom_left": {"label": "Bottom Left", "action": "hyprctl expanse corner bottom_left", "checked": "hyprctl expanse corner | jq -e '.corner == \"bottom_left\"'"},
+  "expanse.corner.bottom_right": {"label": "Bottom Right", "action": "hyprctl expanse corner bottom_right", "checked": "hyprctl expanse corner | jq -e '.corner == \"bottom_right\"'"},
+  "expanse.corner.off": {"label": "Off", "action": "hyprctl expanse corner off", "checked": "hyprctl expanse corner | jq -e '.corner == \"off\"'"},
+  "expanse.keys": {"icon": "", "label": "Shortcuts", "action": "omarchy-launch-floating-terminal-with-presentation hyprctl expanse keys"}
+}

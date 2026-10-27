@@ -3,7 +3,6 @@
 #include "Render.hpp"
 #include "Canvas.hpp"
 
-#include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
@@ -451,9 +450,8 @@ namespace Expanse::Render {
 
         // Over the desktop picture, dimmed; or, with it turned off, a plain
         // background (as Expanse's "Desktop Picture Background" menu item).
-        static auto PWALLPAPER = CConfigValue<Config::BOOL>("plugin:expanse:wallpaper");
         static bool plainLabels = false;
-        const bool  PLAIN       = !*PWALLPAPER;
+        const bool  PLAIN       = !g_canvas.wallpaper();
         if (PLAIN != plainLabels) {
             g_labels.clear();
             plainLabels = PLAIN;
