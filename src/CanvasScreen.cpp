@@ -190,6 +190,9 @@ namespace Expanse {
     }
 
     void CCanvas::simulateScreen(std::optional<Vector2D> size) {
+        // The screen it's laid out for now, if it hasn't been noted yet.
+        if (const auto WORKSPACE = workspace(); WORKSPACE && !m_lastScreens.contains(WORKSPACE->m_name))
+            m_lastScreens[WORKSPACE->m_name] = usableArea();
         m_screenOverride = size;
         relayout();
     }

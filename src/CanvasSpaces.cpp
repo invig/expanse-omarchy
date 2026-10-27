@@ -141,14 +141,14 @@ namespace Expanse {
             return;
         if (!live()) {
             // A workspace last laid out on another screen (its monitor went
-            // away, say) fits this one as it comes into view.
-            if (const auto IT = m_lastScreens.find(target->m_name); IT != m_lastScreens.end())
-                later([this, ref = PHLWORKSPACEREF{target}] {
-                    const auto WORKSPACE = ref.lock();
-                    const auto MONITOR   = WORKSPACE ? WORKSPACE->m_monitor.lock() : nullptr;
-                    if (MONITOR && MONITOR->m_activeWorkspace == WORKSPACE && !live())
-                        relayoutOn(MONITOR);
-                });
+            // away, say) fits this one as it comes into view; one seen for
+            // the first time notes the screen it's laid out for.
+            later([this, ref = PHLWORKSPACEREF{target}] {
+                const auto WORKSPACE = ref.lock();
+                const auto MONITOR   = WORKSPACE ? WORKSPACE->m_monitor.lock() : nullptr;
+                if (MONITOR && MONITOR->m_activeWorkspace == WORKSPACE && !live())
+                    relayoutOn(MONITOR);
+            });
             return;
         }
         if (target->m_monitor != m_monitor || target == m_workspace.lock())
