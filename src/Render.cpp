@@ -67,9 +67,12 @@ namespace Expanse::Render {
     template struct SRob<SHiddenTag, &Desktop::View::CWindow::m_hidden>;
     template struct SRob<SBeingAnimatedTag, &Hyprutils::Animation::CBaseAnimatedVariable::m_bIsBeingAnimated>;
 
-    // Without decorations: their boxes are laid out for the window's real size.
+    // Without decorations (their boxes are laid out for the window's real
+    // size) or popups (theirs aren't moved with it). As on the Mac, where a
+    // menu is a window of its own and closes as the canvas takes the
+    // keyboard, an open menu isn't on the canvas; back at 100% it's there.
     static void renderWindow(PHLWINDOW window, PHLMONITOR monitor, const Time::steady_tp& now) {
-        (g_pHyprRenderer.get()->*robbed(SRenderWindowTag{}))(window, monitor, now, false, ::Render::RENDER_PASS_ALL, false, false);
+        (g_pHyprRenderer.get()->*robbed(SRenderWindowTag{}))(window, monitor, now, false, ::Render::RENDER_PASS_MAIN, false, false);
     }
 
     static void setHiddenQuietly(const PHLWINDOW& window, bool hidden) {
