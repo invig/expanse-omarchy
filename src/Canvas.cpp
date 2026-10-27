@@ -196,6 +196,9 @@ namespace Expanse {
 
         const double SECONDS = FROMIDLE || m_state == STATE_GLIDING ? HOP_SECONDS : DIVE_SECONDS;
 
+        // Too big for the screen, it shrinks to fit; it grows back on a bigger one.
+        fitToScreen(window);
+
         m_target       = window;
         m_hover        = window;
         m_fromKeyboard = fromKeyboard;
@@ -564,33 +567,13 @@ namespace Expanse {
         if (WINDOWS.empty())
             return;
 
-        // Overlaps apart, each cluster pulled to the standard gap, then apart
-        // again; windows bigger than the screen shrink to fit it first.
-        const CBox        AREA = usableArea();
-        const Vector2D    MAXSIZE{AREA.w - 2 * TIDY_MARGIN, AREA.h - 2 * TIDY_MARGIN};
-        std::vector<CBox> frames;
-        for (const auto& window : WINDOWS) {
-            CBox box = canvasBox(window);
-            if (box.w > MAXSIZE.x || box.h > MAXSIZE.y) {
-                const auto TARGET = window->layoutTarget();
-                if (TARGET && TARGET->floating()) {
-                    CBox layout = TARGET->position();
-                    layout.w -= std::max(0.0, box.w - MAXSIZE.x);
-                    layout.h -= std::max(0.0, box.h - MAXSIZE.y);
-                    g_layoutManager->setTargetGeom(layout, TARGET);
-                    TARGET->warpPositionSize();
-                    box = canvasBox(window);
-                }
-            }
-            frames.push_back(box);
-        }
-
-        Arrange::separate(frames, Arrange::GAP);
-        Arrange::gravity(frames, Arrange::clusters(frames, Arrange::CLUSTER_REACH), Arrange::GAP);
-        Arrange::separate(frames, Arrange::GAP);
-
-        for (size_t i = 0; i < WINDOWS.size(); ++i)
-            moveWindow(WINDOWS[i], frames[i].pos());
+        // As on the Mac: sizes back to what you chose (capped at the screen),
+        // overlaps pushed apart, groups pulled back to the standard gap.
+        for (const auto& window : WINDOWS)
+            noteOriginal(window);
+        noteSizes();
+        updateHome();
+        fitLayoutToScreen(TIDY_MARGIN, true);
 
         cameraMovedByUser();
         animateTo(fitCamera(1.0), STATE_OVERVIEW, CAMERA_SECONDS);
@@ -768,7 +751,14 @@ namespace Expanse {
 
     CBox CCanvas::usableArea() const {
         const auto MONITOR = monitor();
-        return MONITOR ? MONITOR->logicalBoxMinusReserved() : CBox{};
+        if (!MONITOR)
+            return {};
+        CBox area = MONITOR->logicalBoxMinusReserved();
+        if (m_screenOverride) {
+            area.w = m_screenOverride->x;
+            area.h = m_screenOverride->y;
+        }
+        return area;
     }
 
     bool CCanvas::fullyVisible(PHLWINDOW window) const {

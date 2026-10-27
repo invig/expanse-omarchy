@@ -22,6 +22,10 @@ namespace Expanse::Store {
         CBox                frame;     // absolute canvas coordinates
         bool                wasTiled = false;
         std::optional<CBox> original; // where it was before the canvas, real coordinates
+        // The size you chose, and the window's spot in the home layout (at
+        // those sizes): windows shrink to fit a smaller screen and grow back.
+        std::optional<Vector2D> preferred;
+        std::optional<Vector2D> home;
         // While the app keeps running (Hyprland or the plugin reloaded), these
         // identify the window exactly, even among windows with the same title.
         uint64_t            address = 0;

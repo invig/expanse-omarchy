@@ -104,6 +104,8 @@ namespace Expanse {
         void                   onFocus(PHLWINDOW window, Desktop::eFocusReason reason);
         void                   onWindowOpen(PHLWINDOW window);
         void                   onWindowClose(PHLWINDOW window);
+        void                   onScreenChanged();
+        void                   simulateScreen(std::optional<Vector2D> size); // debugging: pretend the screen is this size
 
         // What's drawn
         bool                   live() const;
@@ -133,6 +135,17 @@ namespace Expanse {
         void                   reset();
 
       private:
+        // Each window the canvas has touched: where it was before (to put
+        // back), the size you chose, and its spot in the home layout.
+        struct STracked {
+            PHLWINDOWREF            window;
+            bool                    wasTiled = false;
+            CBox                    box;
+            Vector2D                preferred;
+            Vector2D                home;      // absolute canvas
+            std::optional<Vector2D> lastSized; // what the canvas last resized it to
+        };
+
         PHLMONITOR             monitor() const;
         bool                   begin();
         CBox                   usableArea() const;
@@ -158,6 +171,17 @@ namespace Expanse {
         bool                   placeFromSaved(PHLWINDOW window, bool exactOnly);
         void                   putWindowsBack();
         void                   stopSaving();
+
+        // Screens (CanvasScreen.cpp)
+        STracked*              tracked(const PHLWINDOW& window);
+        bool                   isDerived() const;
+        void                   noteSizes();
+        void                   updateHome();
+        void                   noteUserMove(const PHLWINDOW& window, const Vector2D& delta);
+        void                   resizeWindow(const PHLWINDOW& window, const Vector2D& size);
+        void                   fitToScreen(const PHLWINDOW& window);
+        void                   fitLayoutToScreen(double margin, bool tidy);
+        void                   relayout();
         PHLWINDOW              topWindowInView(PHLWINDOW excluding) const;
         void                   commit();
         std::vector<PHLWINDOW> selection() const;
@@ -191,13 +215,10 @@ namespace Expanse {
         // canvas position (real + scrolled) stays meaningful across glides.
         std::unordered_map<std::string, Vector2D> m_scrolled;
 
-        // Where each window the canvas has moved was before it, to put back.
-        struct SOriginal {
-            PHLWINDOWREF window;
-            bool         wasTiled = false;
-            CBox         box;
-        };
-        std::vector<SOriginal>      m_originals;
+        std::vector<STracked>       m_originals;
+        wl_event_source*            m_relayoutTimer = nullptr;
+        std::optional<CBox>         m_lastScreen;
+        std::optional<Vector2D>     m_screenOverride;
         std::vector<Store::SWindow> m_pool; // saved spots of windows not open now
         bool                        m_paused    = false;
         wl_event_source*            m_saveTimer = nullptr;

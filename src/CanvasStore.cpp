@@ -40,12 +40,19 @@ namespace Expanse {
     }
 
     void CCanvas::noteOriginal(PHLWINDOW window) {
-        if (!window || std::ranges::any_of(m_originals, [&](const SOriginal& o) { return o.window.lock() == window; }))
+        if (!window || std::ranges::any_of(m_originals, [&](const STracked& o) { return o.window.lock() == window; }))
             return;
         const auto TARGET = window->layoutTarget();
         if (!TARGET)
             return;
-        m_originals.push_back({window, !TARGET->floating(), TARGET->position()});
+        const CBox BOX = goalBox(window);
+        m_originals.push_back({
+            .window    = window,
+            .wasTiled  = !TARGET->floating(),
+            .box       = TARGET->position(),
+            .preferred = BOX.size(),
+            .home      = BOX.pos() + scrolledFor(window->m_workspace),
+        });
     }
 
     void CCanvas::scheduleSave() {
@@ -66,6 +73,9 @@ namespace Expanse {
         if (m_saveTimer)
             wl_event_source_remove(m_saveTimer);
         m_saveTimer = nullptr;
+        if (m_relayoutTimer)
+            wl_event_source_remove(m_relayoutTimer);
+        m_relayoutTimer = nullptr;
     }
 
     void CCanvas::saveNow() {
@@ -77,7 +87,9 @@ namespace Expanse {
         for (const auto& [name, offset] : m_scrolled)
             layout.scrolled.emplace_back(name, offset);
 
-        std::erase_if(m_originals, [](const SOriginal& o) { return !onCanvasWorkspace(o.window.lock()); });
+        std::erase_if(m_originals, [](const STracked& o) { return !onCanvasWorkspace(o.window.lock()); });
+        noteSizes();
+        updateHome();
         for (const auto& original : m_originals) {
             const auto WINDOW = original.window.lock();
             const CBox FRAME  = goalBox(WINDOW).translate(scrolledFor(WINDOW->m_workspace));
@@ -88,6 +100,8 @@ namespace Expanse {
                 .frame     = FRAME,
                 .wasTiled  = original.wasTiled,
                 .original  = original.box,
+                .preferred = original.preferred,
+                .home      = original.home,
                 .address   = reinterpret_cast<uint64_t>(WINDOW.get()),
                 .pid       = WINDOW->getPID(),
             });
@@ -124,11 +138,16 @@ namespace Expanse {
             return false;
 
         // Where it was before the canvas: the saved record, or what it is now.
-        if (!std::ranges::any_of(m_originals, [&](const SOriginal& o) { return o.window.lock() == window; })) {
+        if (!tracked(window)) {
             if (match->original)
-                m_originals.push_back({window, match->wasTiled, *match->original});
+                m_originals.push_back({.window = window, .wasTiled = match->wasTiled, .box = *match->original});
             else
                 noteOriginal(window);
+        }
+        if (auto* entry = tracked(window)) {
+            entry->preferred = match->preferred.value_or(match->frame.size());
+            entry->home      = match->home.value_or(match->frame.pos());
+            entry->lastSized = match->frame.size();
         }
 
         if (!TARGET->floating())
@@ -149,6 +168,7 @@ namespace Expanse {
     }
 
     void CCanvas::restoreCanvas() {
+        m_lastScreen = usableArea();
         const auto LAYOUT = Store::load();
         if (!LAYOUT)
             return;
@@ -170,7 +190,7 @@ namespace Expanse {
     }
 
     void CCanvas::onWindowClose(PHLWINDOW window) {
-        const auto IT = std::ranges::find_if(m_originals, [&](const SOriginal& o) { return o.window.lock() == window; });
+        const auto IT = std::ranges::find_if(m_originals, [&](const STracked& o) { return o.window.lock() == window; });
         if (IT == m_originals.end() || !window->m_workspace)
             return;
 
@@ -182,6 +202,8 @@ namespace Expanse {
                                           .frame     = goalBox(window).translate(scrolledFor(window->m_workspace)),
                                           .wasTiled  = IT->wasTiled,
                                           .original  = IT->box,
+                                          .preferred = IT->preferred,
+                                          .home      = IT->home,
                                       });
         m_originals.erase(IT);
         scheduleSave();

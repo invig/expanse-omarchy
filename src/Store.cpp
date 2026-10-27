@@ -51,6 +51,8 @@ namespace Expanse::Store {
                     .frame     = *FRAME,
                     .wasTiled  = entry.boolean("wasTiled").value_or(false),
                     .original  = box(entry, "ox", "oy", "ow", "oh"),
+                    .preferred = entry.number("pw") && entry.number("ph") ? std::optional{Vector2D{*entry.number("pw"), *entry.number("ph")}} : std::nullopt,
+                    .home      = entry.number("hx") && entry.number("hy") ? std::optional{Vector2D{*entry.number("hx"), *entry.number("hy")}} : std::nullopt,
                     .address   = static_cast<uint64_t>(entry.number("address").value_or(0)),
                     .pid       = static_cast<int64_t>(entry.number("pid").value_or(0)),
                 });
@@ -70,6 +72,10 @@ namespace Expanse::Store {
                                Json::quote(W.app), Json::quote(W.title), Json::quote(W.workspace), W.frame.x, W.frame.y, W.frame.w, W.frame.h, W.wasTiled);
             if (W.original)
                 out += std::format(", \"ox\": {}, \"oy\": {}, \"ow\": {}, \"oh\": {}", W.original->x, W.original->y, W.original->w, W.original->h);
+            if (W.preferred)
+                out += std::format(", \"pw\": {}, \"ph\": {}", W.preferred->x, W.preferred->y);
+            if (W.home)
+                out += std::format(", \"hx\": {}, \"hy\": {}", W.home->x, W.home->y);
             // Addresses stay below 2^53 on 64-bit Linux, so a JSON number holds them exactly.
             out += std::format(", \"address\": {}, \"pid\": {}}}", W.address, W.pid);
         }

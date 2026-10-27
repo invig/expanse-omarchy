@@ -155,6 +155,14 @@ static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
         if (!(words >> dx >> dy))
             return USAGE;
         g_canvas.pan({-dx, -dy});
+    } else if (verb == "screen") {
+        // Debugging, as expanse://screen on the Mac: pretend the screen is
+        // this size (no size: the real one again).
+        double w = 0, h = 0;
+        if (words >> w >> h && w > 0 && h > 0)
+            g_canvas.simulateScreen(Vector2D{w, h});
+        else
+            g_canvas.simulateScreen(std::nullopt);
     } else if (verb == "select") {
         g_canvas.selectAll();
     } else if (verb == "autocentre" || verb == "autocenter") {
@@ -225,6 +233,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_listeners.push_back(events.window.active.listen([](PHLWINDOW window, Desktop::eFocusReason reason) { g_canvas.onFocus(window, reason); }));
     g_listeners.push_back(events.window.openLate.listen([](PHLWINDOW window) { g_canvas.onWindowOpen(window); }));
     g_listeners.push_back(events.window.close.listen([](PHLWINDOW window) { g_canvas.onWindowClose(window); }));
+    g_listeners.push_back(events.monitor.layoutChanged.listen([] { g_canvas.onScreenChanged(); }));
 
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "overview", luaOverview);
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "hop", luaHop);

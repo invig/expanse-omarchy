@@ -28,6 +28,8 @@ Built and tested on Omarchy (Hyprland 0.56.2, aarch64) in [Try Omarchy](https://
 
 The canvas is remembered in `~/.local/state/expanse/layout.json` (window titles only as a hash): reloading the plugin brings it back exactly, and a window an app opens again, after a restart too, returns to its spot. Unloading the plugin or pausing it puts every window back where it was before the canvas, tiled ones back into their layout; resuming brings the canvas back.
 
+The canvas follows you between screens: it keeps a home layout at the sizes you chose. On a smaller screen windows shrink to fit and the layout tightens, each window keeping its gap to its neighbours; back on the big screen everything returns exactly. Whatever was in the middle of the old screen stays in the middle of the new one, and a window too big for the screen shrinks to fit as you go to it.
+
 New windows open in free space, next to what you were working on, instead of on top of it; if the nearest free spot is off screen, the canvas glides there. Dialogs keep the spot their app gives them.
 
 The keys after the first three work on the canvas (zoomed out, or after scrolling on the desktop). <kbd>Super</kbd> stands in for the Mac's <kbd>⌘</kbd> and <kbd>Ctrl</kbd>, so <kbd>Super</kbd> + <kbd>W</kbd> on the canvas closes the hovered window instead of the focused one.
@@ -76,7 +78,7 @@ Rebuild after every Hyprland update: plugins are tied to the exact Hyprland buil
 
 ## Scripting and tests
 
-`hyprctl expanse` prints the canvas as JSON. `hyprctl expanse` with `toggle`, `open`, `close`, `tidy`, `fit`, `zoom <scale>`, `pan <dx> <dy>`, `hop <left|right|up|down>`, `focus <app>`, `select all`, `restore` (every window back into view), `pause`, `resume` or `autocentre <on|off>` drives it, and `pick <x> <y>` clicks the canvas at a global logical point. In Lua, `hl.plugin.expanse.pause()` toggles pausing and `restore()` brings windows back into view.
+`hyprctl expanse` prints the canvas as JSON. `hyprctl expanse` with `toggle`, `open`, `close`, `tidy`, `fit`, `zoom <scale>`, `pan <dx> <dy>`, `hop <left|right|up|down>`, `focus <app>`, `select all`, `restore` (every window back into view), `pause`, `resume`, `autocentre <on|off>` or, for debugging, `screen <w> <h>` (pretend the screen is that size; no size for the real one) drives it, and `pick <x> <y>` clicks the canvas at a global logical point. In Lua, `hl.plugin.expanse.pause()` toggles pausing and `restore()` brings windows back into view.
 
 `make test` checks the nearest-window rule and the layout file case by case. The nearest-window rule, snapping, tidy-up, free-space placement and the layout for a smaller screen were also checked against Expanse's own Swift on thousands of random layouts, with no differences.
 

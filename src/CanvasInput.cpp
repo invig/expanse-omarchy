@@ -168,8 +168,12 @@ namespace Expanse {
             m_drag          = {};
             m_guides.clear();
             damage();
-            if (DRAG.kind == SDrag::DRAG_WINDOW && DRAG.moved)
+            if (DRAG.kind == SDrag::DRAG_WINDOW && DRAG.moved) {
+                for (const auto& [ref, box] : DRAG.starts)
+                    if (const auto WINDOW = ref.lock())
+                        noteUserMove(WINDOW, WINDOW->position(Desktop::View::IGeometric::GEOMETRIC_GOAL) - box.pos());
                 scheduleSave();
+            }
             // A click (no drag) on a window dives into it.
             if (DRAG.kind == SDrag::DRAG_WINDOW && !DRAG.moved)
                 if (const auto WINDOW = DRAG.window.lock())
