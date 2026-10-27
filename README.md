@@ -4,7 +4,7 @@
 
 Built and tested on Omarchy (Hyprland 0.56.2, aarch64) in [Try Omarchy](https://github.com/omacom/try-omarchy).
 
-![Zoomed out: every window on the canvas, the one under the pointer ringed](docs/overview.jpg)
+![Zoomed out: every window on the canvas, the one under the pointer ringed; the workspaces bar and minimap bottom right](docs/overview.jpg)
 
 ## Using it
 

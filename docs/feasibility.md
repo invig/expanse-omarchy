@@ -1,7 +1,7 @@
 # Expanse on Omarchy/Hyprland: feasibility read (2026-10-27)
 
 ## Verdict
-Feasible, and easier than on macOS: a Hyprland plugin runs inside the compositor, so it can draw live scaled windows and own input while zoomed out. Milestone 1 (zoom out and pick) works on Omarchy aarch64 in Try Omarchy.
+Feasible, and easier than on macOS: a Hyprland plugin runs inside the compositor, so it can draw live scaled windows and own input while zoomed out. Every feature in Expanse's README now works on Omarchy aarch64 in Try Omarchy (see the main README for what and how).
 
 ## VM on this Mac
 - try-omarchy is a notarized Mac app: QEMU + Apple Hypervisor framework + VirGL GPU, running stock aarch64 Omarchy (edge channel), plus one guest package for Mac integration.
@@ -22,7 +22,8 @@ Feasible, and easier than on macOS: a Hyprland plugin runs inside the compositor
 - Protected members (`renderWindow`, a window's raw hidden flag, an animated variable's "being animated" flag) are reached through explicit-instantiation member pointers. `#define private public` breaks GCC 16's `<any>`.
 - No stable ABI: rebuild on every Hyprland update.
 - Camera vs windows: Hyprland has no global camera. At 100% the camera is implicit and panning moves every floating window's real position (Expanse's macOS approach); input, focus, popups and X11 stay native. Only while zoomed out or gliding is anything drawn through the camera.
-- Workspaces: canvas = the monitor's active workspace, all windows floating. Workspace keys are left alone for now.
+- Workspaces: each workspace is a canvas of its own (the monitor's active one is shown), all windows floating. Workspace binds stay Hyprland's; switching while zoomed out brings the canvas along, and a workspaces bar stands in for Expanse's Spaces bar.
+- Full screen: Hyprland fades out every other window under a full-screen one, so the canvas takes a full-screen window out of full screen while it's up, through the same handler that put it there (otherwise Hyprland remembers the wrong floating size), and puts it back if you leave without picking another window.
 
 ## Prior art
 - Phantomat (github.com/kaolti/phantomat, BSD-3): an Expanse-like infinite canvas plugin made on Omarchy with Hyprland 0.56 (x86_64, NVIDIA): zoom out, type/click to land, SUPER+arrows hops, tidy-up, remembers spots, lens effects. Fork of hyprland-scroll-overview. Closest prior art; relies on function hooks, so x86_64 only.
