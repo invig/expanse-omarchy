@@ -771,16 +771,20 @@ wait(2)
 vm(f"kill {client(T1)['pid']}")
 
 # A window too big for the screen shrinks to fit as you go to it, and grows back on a bigger one.
-open_app(BIG, "1500 1000")
-ctl("screen 1100 800")
+# Sizes relative to the screen: the VM's follows its window on the Mac.
+big = (int(W * 0.6), int(H * 0.6))
+tight = (int(W * 0.45), int(H * 0.45))
+open_app(BIG, f"{big[0]} {big[1]}")
+chosen = real()[BIG][2:]
+ctl(f"screen {tight[0]} {tight[1]}")
 wait(2.5)
 ctl(f"focus {BIG}")
 settle()
 small = real()[BIG]
-check("a window too big for the screen shrinks to fit as you go to it", small[2] <= 1100 and small[3] <= 800, f"{small}")
+check("a window too big for the screen shrinks to fit as you go to it", small[2] <= tight[0] and small[3] <= tight[1], f"{small} on {tight}")
 ctl("screen")
 wait(2.5)
-check("and grows back on the big screen", real()[BIG][2:] == [1500, 1000], f"{real()[BIG]}")
+check("and grows back on the big screen", real()[BIG][2:] == chosen, f"{real()[BIG]} vs {chosen}")
 
 # Leaving a workspace from the canvas without moving around leaves it as it was.
 before = real()
