@@ -131,7 +131,16 @@ namespace Expanse::Render {
         g_pHyprRenderer->addPassElement(std::move(element));
     }
 
+    // Hyprland aborts on a rect, border or texture with no width or height
+    // (a marquee dragged straight sideways, a window mid-map), so nothing
+    // empty is ever handed to it.
+    static bool drawable(const CBox& px) {
+        return px.w >= 1 && px.h >= 1;
+    }
+
     static void addRect(const CBox& px, const CHyprColor& color, int round = 0) {
+        if (!drawable(px))
+            return;
         CRectPassElement::SRectData rect;
         rect.box   = px;
         rect.color = color;
@@ -141,6 +150,8 @@ namespace Expanse::Render {
 
     // Hyprland draws a border outside its box, `points` wide.
     static void addBorder(const CBox& px, const CHyprColor& color, int points, int round) {
+        if (!drawable(px))
+            return;
         CBorderPassElement::SBorderData border;
         border.box        = px;
         border.grad1      = Config::CGradientValueData{color};
@@ -157,6 +168,8 @@ namespace Expanse::Render {
 
     // Expanse's window shadow, through Hyprland's shadow shader. A pass
     // element of our own: Hyprland's needs a window decoration.
+    constexpr const char* SHADOW_PASS = "CExpanseShadowElement";
+
     class CShadowElement : public IPassElement {
       public:
         CShadowElement(const CBox& px, int round, float roundingPower, int range, float alpha) :
@@ -175,7 +188,7 @@ namespace Expanse::Render {
             return false;
         }
         const char* passName() override {
-            return "CExpanseShadowElement";
+            return SHADOW_PASS;
         }
         ePassElementType type() override {
             return EK_CUSTOM;
@@ -192,7 +205,7 @@ namespace Expanse::Render {
     // As on the Mac, in canvas units so it shrinks with the window. It fades
     // in as you zoom out: Omarchy's windows have no shadow at 100%.
     static void addShadow(const PHLMONITOR& monitor, const PHLWINDOW& window, const CBox& screen, double scale, float shown) {
-        if (shown <= 0.F)
+        if (shown <= 0.F || !drawable(toPixels(screen, monitor)))
             return;
         const double S     = monitor->m_scale;
         const double RANGE = std::max(1.0, SHADOW_RADIUS * scale);
@@ -205,11 +218,12 @@ namespace Expanse::Render {
     // it: Hyprland lays its decorations out for the window's real box, so the
     // windows are drawn without them.
     static void addWindowBorder(const PHLMONITOR& monitor, const PHLWINDOW& window, const CBox& screen, double scale) {
-        const int SIZE = window->getRealBorderSize();
-        if (SIZE <= 0)
+        const int  SIZE = window->getRealBorderSize();
+        const CBox BOX  = toPixels(screen, monitor);
+        if (SIZE <= 0 || !drawable(BOX))
             return;
         CBorderPassElement::SBorderData border;
-        border.box           = toPixels(screen, monitor);
+        border.box           = BOX;
         border.grad1         = window->m_realBorderColor;
         border.borderSize    = SIZE;
         border.round         = std::round(window->rounding() * scale * monitor->m_scale);
@@ -226,7 +240,7 @@ namespace Expanse::Render {
     }
 
     static void addTexture(const SP<::Render::ITexture>& tex, const Vector2D& px) {
-        if (!tex)
+        if (!tex || !drawable({px, tex->m_size}))
             return;
         CTexPassElement::SRenderData data;
         data.tex = tex;
@@ -540,6 +554,11 @@ namespace Expanse::Render {
     }
 
     void shutdown() {
+        // Hyprland keeps the last frame's pass elements until the next frame
+        // starts. The ones made here were made with deleters (and, for the
+        // shadow, code) that go away with the plugin, so they go first. The
+        // pass is rebuilt every frame and nothing is drawing now.
+        g_pHyprRenderer->m_renderPass.clear();
         updateParking(false);
         unhideForeignWindows();
         unhideCanvasWindows();

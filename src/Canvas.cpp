@@ -1037,10 +1037,12 @@ namespace Expanse {
         const auto HOVER     = m_hover.lock();
         const auto TARGET    = m_target.lock();
         const auto WORKSPACE = workspace();
+        const auto MARQUEE   = marquee();
         const auto SCROLLED  = scrolledFor(WORKSPACE);
-        return std::format(R"({{"state":"{}","paused":{},"workspace":"{}","scale":{:.3f},"origin":[{:.1f},{:.1f}],"scrolled":[{:.1f},{:.1f}],"autoCentre":{},"wallpaper":{},"hotCorner":"{}","hover":"{}","target":"{}","windows":[{}],"spaces":[{}]}})",
+        return std::format(R"({{"state":"{}","paused":{},"workspace":"{}","scale":{:.3f},"origin":[{:.1f},{:.1f}],"scrolled":[{:.1f},{:.1f}],"autoCentre":{},"wallpaper":{},"hotCorner":"{}","hover":"{}","target":"{}","marquee":{},"windows":[{}],"spaces":[{}]}})",
                            STATES[m_state], m_paused, WORKSPACE ? jsonEscape(WORKSPACE->m_name) : "", m_camera.scale, m_camera.origin.x, m_camera.origin.y, SCROLLED.x,
-                           SCROLLED.y, m_autoCentre, wallpaper(), jsonEscape(g_hotCorner.corner()), HOVER ? jsonEscape(HOVER->m_title) : "", TARGET ? jsonEscape(TARGET->m_title) : "", windows, spaces) +
+                           SCROLLED.y, m_autoCentre, wallpaper(), jsonEscape(g_hotCorner.corner()), HOVER ? jsonEscape(HOVER->m_title) : "", TARGET ? jsonEscape(TARGET->m_title) : "",
+                           MARQUEE ? std::format("[{:.1f},{:.1f},{:.1f},{:.1f}]", MARQUEE->x, MARQUEE->y, MARQUEE->w, MARQUEE->h) : "null", windows, spaces) +
             "\n";
     }
 
