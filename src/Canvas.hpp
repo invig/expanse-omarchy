@@ -263,7 +263,21 @@ namespace Expanse {
         // Per workspace, the screen its layout was last fitted to: monitors
         // can differ, and a workspace can move between them.
         std::unordered_map<std::string, CBox> m_lastScreens;
-        PHLMONITORREF               m_layoutMonitor; // fitting a monitor other than the focused one
+        PHLMONITORREF               m_layoutMonitor;   // fitting a monitor other than the focused one
+        PHLWORKSPACEREF             m_layoutWorkspace; // placing on a workspace that isn't showing
+
+        // While it lives, and the canvas isn't up, canvas queries are about
+        // this workspace, on its own monitor, as if it were showing there.
+        struct SLookAt {
+            SLookAt(CCanvas& canvas, const PHLWORKSPACE& workspace) : m_canvas(canvas), m_previous(canvas.m_layoutWorkspace) {
+                m_canvas.m_layoutWorkspace = workspace;
+            }
+            ~SLookAt() {
+                m_canvas.m_layoutWorkspace = m_previous;
+            }
+            CCanvas&        m_canvas;
+            PHLWORKSPACEREF m_previous;
+        };
         std::optional<Vector2D>     m_screenOverride;
         // Until then, Hyprland is still moving windows for a monitor change.
         std::chrono::steady_clock::time_point m_settledAt;

@@ -565,9 +565,14 @@ namespace Expanse {
         // A new standard window opens in free space beside what you were
         // working on (the top window in view), instead of on top of it.
         // Dialogs keep the spot their app gives them.
-        if (m_paused || !window || window->parent() || window->isModal() || window->isX11OverrideRedirect())
+        if (m_paused || !window || window->parent() || window->isModal() || window->isX11OverrideRedirect() || !window->m_workspace)
             return;
 
+        // On its own workspace, showing or not (a rule or an app can open it
+        // on another); with the canvas up, only on the canvas's.
+        if (live() && window->m_workspace != m_workspace.lock())
+            return;
+        SLookAt    here{*this, window->m_workspace};
         const auto ANCHOR = topWindowInView(window);
         // Out of the event: Hyprland is still mapping the window.
         g_pEventLoopManager->doLater([this, ref = PHLWINDOWREF{window}, anchor = PHLWINDOWREF{ANCHOR}] {
@@ -579,16 +584,21 @@ namespace Expanse {
     void CCanvas::placeNewWindow(PHLWINDOW window, PHLWINDOW anchor) {
         if (!window->m_isMapped || !window->m_workspace || window->m_workspace->m_isSpecialWorkspace || m_state == STATE_GLIDING)
             return;
+        if (live() && window->m_workspace != m_workspace.lock())
+            return;
 
         const auto TARGET = window->layoutTarget();
         if (!TARGET)
             return;
 
+        SLookAt    here{*this, window->m_workspace};
+        const bool SHOWING = window->m_workspace->isVisible();
+
         // A window that had a spot last time (an app opened again, or after a
         // restart, on any workspace) goes back to it.
         if (placeFromSaved(window, false)) {
             scheduleSave();
-            if (isCanvasWindow(window) && !live() && !fullyVisible(window))
+            if (SHOWING && isCanvasWindow(window) && !live() && !fullyVisible(window))
                 glideTo(window);
             return;
         }
@@ -618,7 +628,7 @@ namespace Expanse {
         scheduleSave();
 
         // Off screen: the canvas glides to it, as to any window you go to.
-        if (!live() && !fullyVisible(window))
+        if (SHOWING && !live() && !fullyVisible(window))
             glideTo(window);
     }
 
@@ -734,12 +744,16 @@ namespace Expanse {
             return m_monitor.lock();
         if (const auto LAYOUT = m_layoutMonitor.lock())
             return LAYOUT;
+        if (const auto LOOKING = m_layoutWorkspace.lock())
+            return LOOKING->m_monitor.lock();
         return Desktop::focusState()->monitor();
     }
 
     PHLWORKSPACE CCanvas::workspace() const {
         if (live())
             return m_workspace.lock();
+        if (const auto LOOKING = m_layoutWorkspace.lock())
+            return LOOKING;
         const auto MONITOR = monitor();
         return MONITOR ? MONITOR->m_activeWorkspace : nullptr;
     }
