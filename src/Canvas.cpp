@@ -588,9 +588,17 @@ namespace Expanse {
         // A window back from full screen (or maximised) is what you're
         // looking at, with the keyboard, wherever the view has got to
         // meanwhile: the view goes to it, as on the Mac, once it's back in its
-        // box. Not when the canvas takes it out of full screen or back.
-        if (m_paused || m_ownFullscreenChange || live() || !window || Fullscreen::controller()->isFullscreen(window) || !g_pCompositor ||
-            !g_pCompositor->m_wlEventLoop)
+        // box. Not when the canvas takes it out of full screen or back, nor
+        // for a request Hyprland didn't carry out.
+        if (!window)
+            return;
+        std::erase_if(m_wentFullscreen, [](const PHLWINDOWREF& ref) { return !ref.lock(); });
+        const bool WAS = std::erase_if(m_wentFullscreen, [&](const PHLWINDOWREF& ref) { return ref.lock() == window; }) > 0;
+        if (Fullscreen::controller()->isFullscreen(window)) {
+            m_wentFullscreen.emplace_back(window);
+            return;
+        }
+        if (!WAS || m_paused || m_ownFullscreenChange || live() || !g_pCompositor || !g_pCompositor->m_wlEventLoop)
             return;
         m_backFromFullscreen = window;
         if (!m_fullscreenTimer)

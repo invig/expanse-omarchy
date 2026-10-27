@@ -242,6 +242,11 @@ namespace Expanse {
     }
 
     void CCanvas::restoreCanvas() {
+        // Full screen already: back from it gets the view (onFullscreen).
+        for (const auto& window : Desktop::windowState()->windows())
+            if (window->m_isMapped && Fullscreen::controller()->isFullscreen(window))
+                m_wentFullscreen.emplace_back(window);
+
         // Each monitor's workspace is laid out for that monitor as it is.
         for (const auto& monitor : State::monitorState()->monitors()) {
             if (!monitor || !monitor->m_enabled || !monitor->m_activeWorkspace)
@@ -332,6 +337,7 @@ namespace Expanse {
         m_paused = true;
         reset();
         m_unplaced.clear();
+        m_wentFullscreen.clear(); // noted again on resume
         putWindowsBack();
         m_originals.clear();
         m_pool.clear();

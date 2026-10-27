@@ -322,7 +322,9 @@ namespace Expanse {
             bool                        layoutAware = false; // which of Hyprland's handlers had it
         } m_fullscreen;
         bool             m_ownFullscreenChange = false; // the canvas taking a window out of full screen or back
-        // A window back from full screen, which the view goes to once it's back in its box.
+        // Windows that went full screen (or maximised); one coming back gets the
+        // view once it's back in its box. Hyprland reports refused requests too.
+        std::vector<PHLWINDOWREF> m_wentFullscreen;
         PHLWINDOWREF     m_backFromFullscreen;
         wl_event_source* m_fullscreenTimer = nullptr;
 
