@@ -24,11 +24,14 @@ Built and tested on Omarchy (Hyprland 0.56.2, aarch64) in [Try Omarchy](https://
 | Hover <kbd>×</kbd>, or <kbd>Super</kbd> + <kbd>W</kbd> | Close the hovered window, or every selected window at once |
 | <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>`</kbd> | Auto-centre on or off. Off: clicking a window that's partly on screen leaves the canvas where it is, for side-by-side work |
 | Click or drag on the minimap | Move the view there |
+| Click a tile on the workspaces bar | Go to that workspace's canvas, still zoomed out |
 | Right-click on the canvas | Back to 100% |
 
 The canvas is remembered in `~/.local/state/expanse/layout.json` (window titles only as a hash): reloading the plugin brings it back exactly, and a window an app opens again, after a restart too, returns to its spot. Unloading the plugin or pausing it puts every window back where it was before the canvas, tiled ones back into their layout; resuming brings the canvas back.
 
 The canvas follows you between screens: it keeps a home layout at the sizes you chose. On a smaller screen windows shrink to fit and the layout tightens, each window keeping its gap to its neighbours; back on the big screen everything returns exactly. Whatever was in the middle of the old screen stays in the middle of the new one, and a window too big for the screen shrinks to fit as you go to it.
+
+Every workspace has a canvas of its own. Zoomed out, the workspaces bar beside the minimap (Expanse's Spaces bar) shows each workspace on the monitor as a small map of its windows, the one you're on outlined; it's hidden while there's only one. Going to another workspace with the canvas up, from the bar or a workspace bind like <kbd>Super</kbd> + <kbd>2</kbd>, brings the canvas along, zoomed out, so you can pick a window there; the one you left settles where leaving it would have taken you.
 
 New windows open in free space, next to what you were working on, instead of on top of it; if the nearest free spot is off screen, the canvas glides there. Dialogs keep the spot their app gives them.
 
@@ -78,7 +81,7 @@ Rebuild after every Hyprland update: plugins are tied to the exact Hyprland buil
 
 ## Scripting and tests
 
-`hyprctl expanse` prints the canvas as JSON. `hyprctl expanse` with `toggle`, `open`, `close`, `tidy`, `fit`, `zoom <scale>`, `pan <dx> <dy>`, `hop <left|right|up|down>`, `focus <app>`, `select all`, `restore` (every window back into view), `pause`, `resume`, `autocentre <on|off>` or, for debugging, `screen <w> <h>` (pretend the screen is that size; no size for the real one) drives it, and `pick <x> <y>` clicks the canvas at a global logical point. In Lua, `hl.plugin.expanse.pause()` toggles pausing and `restore()` brings windows back into view.
+`hyprctl expanse` prints the canvas as JSON. `hyprctl expanse` with `toggle`, `open`, `close`, `tidy`, `fit`, `zoom <scale>`, `pan <dx> <dy>`, `hop <left|right|up|down>`, `focus <app>`, `space <name>` (that workspace's canvas, zoomed out), `select all`, `restore` (every window back into view), `pause`, `resume`, `autocentre <on|off>` or, for debugging, `screen <w> <h>` (pretend the screen is that size; no size for the real one) drives it, and `pick <x> <y>` clicks the canvas at a global logical point. In Lua, `hl.plugin.expanse.pause()` toggles pausing and `restore()` brings windows back into view.
 
 `make test` checks the nearest-window rule and the layout file case by case. The nearest-window rule, snapping, tidy-up, free-space placement and the layout for a smaller screen were also checked against Expanse's own Swift on thousands of random layouts, with no differences.
 

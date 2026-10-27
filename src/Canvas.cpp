@@ -29,7 +29,6 @@ namespace Expanse {
     constexpr double DIVE_SECONDS       = 0.18; // from the canvas into a window, or back
     constexpr double HOP_SECONDS        = 0.30; // at 100%
     constexpr double PAN_SECONDS        = 0.25; // on the canvas, following the highlight
-    constexpr double OVERVIEW_MAX_SCALE = 0.6;
     constexpr double FIT_INSET          = 80.0; // canvas px around everything, when fitting
     constexpr double MIN_SCALE          = 0.03;
     constexpr double MAX_SCALE          = 1.5;
@@ -141,6 +140,7 @@ namespace Expanse {
         m_monitor   = MONITOR;
         m_workspace = MONITOR->m_activeWorkspace;
         m_target.reset();
+        m_hoverSpace.reset();
         m_selected.clear();
         m_drag = {};
         m_guides.clear();
@@ -377,6 +377,34 @@ namespace Expanse {
         g_pHyprRenderer->damageMonitor(monitor);
     }
 
+    void CCanvas::settle(const SCamera& camera) {
+        // The real windows move so the camera's view (at 100%) is the screen.
+        const auto MONITOR = m_monitor.lock();
+        if (!MONITOR)
+            return;
+
+        const Vector2D DELTA = camera.origin - MONITOR->m_position;
+        if (DELTA.size() <= 0.5)
+            return;
+
+        for (const auto& window : canvasWindows()) {
+            if (Fullscreen::controller()->isFullscreen(window))
+                continue;
+
+            const auto TARGET = window->layoutTarget();
+            if (!TARGET || !TARGET->floating())
+                continue;
+
+            noteOriginal(window);
+            CBox box = TARGET->position();
+            box.translate(-DELTA);
+            g_layoutManager->setTargetGeom(box, TARGET);
+            TARGET->warpPositionSize();
+        }
+        if (const auto WORKSPACE = m_workspace.lock())
+            m_scrolled[WORKSPACE->m_name] = scrolledFor(WORKSPACE) + DELTA;
+    }
+
     void CCanvas::commit() {
         const auto MONITOR = m_monitor.lock();
         if (!MONITOR) {
@@ -384,26 +412,7 @@ namespace Expanse {
             return;
         }
 
-        const Vector2D DELTA = m_camera.origin - MONITOR->m_position;
-
-        if (DELTA.size() > 0.5) {
-            for (const auto& window : canvasWindows()) {
-                if (Fullscreen::controller()->isFullscreen(window))
-                    continue;
-
-                const auto TARGET = window->layoutTarget();
-                if (!TARGET || !TARGET->floating())
-                    continue;
-
-                noteOriginal(window);
-                CBox box = TARGET->position();
-                box.translate(-DELTA);
-                g_layoutManager->setTargetGeom(box, TARGET);
-                TARGET->warpPositionSize();
-            }
-            if (const auto WORKSPACE = m_workspace.lock())
-                m_scrolled[WORKSPACE->m_name] = scrolledFor(WORKSPACE) + DELTA;
-        }
+        settle(m_camera);
 
         m_camera = homeCamera();
         m_state  = STATE_IDLE;
@@ -865,6 +874,8 @@ namespace Expanse {
     PHLWINDOW CCanvas::windowAt(const Vector2D& pos) const {
         if (const auto MAP = minimap(); MAP && MAP->box.containsPoint(pos))
             return nullptr;
+        if (const auto BAR = spacesBar(); BAR && BAR->box.containsPoint(pos))
+            return nullptr;
         const auto WINDOWS = canvasWindows();
         for (const auto& window : WINDOWS | std::views::reverse) {
             if (screenBox(window).containsPoint(pos))
@@ -887,12 +898,19 @@ namespace Expanse {
                                    CANVAS.y + scrolledFor(window->m_workspace).y, CANVAS.w, CANVAS.h, SCREEN.x, SCREEN.y, SCREEN.w, SCREEN.h);
         }
 
-        const auto HOVER    = m_hover.lock();
-        const auto TARGET   = m_target.lock();
-        const auto SCROLLED = scrolledFor(workspace());
-        return std::format(R"({{"state":"{}","paused":{},"scale":{:.3f},"origin":[{:.1f},{:.1f}],"scrolled":[{:.1f},{:.1f}],"autoCentre":{},"hover":"{}","target":"{}","windows":[{}]}})",
-                           STATES[m_state], m_paused, m_camera.scale, m_camera.origin.x, m_camera.origin.y, SCROLLED.x, SCROLLED.y, m_autoCentre,
-                           HOVER ? jsonEscape(HOVER->m_title) : "", TARGET ? jsonEscape(TARGET->m_title) : "", windows) +
+        std::string spaces;
+        if (const auto BAR = spacesBar())
+            for (const auto& tile : BAR->tiles)
+                spaces += std::format(R"({}{{"name":"{}","windows":{},"current":{},"hovered":{},"tile":[{:.0f},{:.0f},{:.0f},{:.0f}]}})", spaces.empty() ? "" : ",",
+                                      jsonEscape(tile.name), tile.windows.size(), tile.current, tile.hovered, tile.box.x, tile.box.y, tile.box.w, tile.box.h);
+
+        const auto HOVER     = m_hover.lock();
+        const auto TARGET    = m_target.lock();
+        const auto WORKSPACE = workspace();
+        const auto SCROLLED  = scrolledFor(WORKSPACE);
+        return std::format(R"({{"state":"{}","paused":{},"workspace":"{}","scale":{:.3f},"origin":[{:.1f},{:.1f}],"scrolled":[{:.1f},{:.1f}],"autoCentre":{},"hover":"{}","target":"{}","windows":[{}],"spaces":[{}]}})",
+                           STATES[m_state], m_paused, WORKSPACE ? jsonEscape(WORKSPACE->m_name) : "", m_camera.scale, m_camera.origin.x, m_camera.origin.y, SCROLLED.x,
+                           SCROLLED.y, m_autoCentre, HOVER ? jsonEscape(HOVER->m_title) : "", TARGET ? jsonEscape(TARGET->m_title) : "", windows, spaces) +
             "\n";
     }
 
@@ -901,6 +919,7 @@ namespace Expanse {
         m_animating = false;
         m_target.reset();
         m_hover.reset();
+        m_hoverSpace.reset();
         m_selected.clear();
         m_drag = {};
         m_guides.clear();

@@ -75,6 +75,14 @@ namespace Expanse {
             damage();
         }
 
+        const auto BAR   = spacesBar();
+        const auto TILE  = BAR ? BAR->tileAt(pos) : std::nullopt;
+        const auto SPACE = TILE ? BAR->tiles[*TILE].workspace.lock() : nullptr;
+        if (SPACE != m_hoverSpace.lock()) {
+            m_hoverSpace = SPACE;
+            damage();
+        }
+
         // Swallowed so apps don't see a pointer over their real, off-view
         // positions and focus doesn't follow the mouse.
         return true;
@@ -197,6 +205,13 @@ namespace Expanse {
         // A press stops the camera where it is.
         if (m_animating)
             setCamera(m_camera);
+
+        // On the workspaces bar: a tile goes to that workspace's canvas.
+        if (const auto BAR = spacesBar(); BAR && BAR->box.containsPoint(POS)) {
+            if (const auto TILE = BAR->tileAt(POS))
+                switchTo(BAR->tiles[*TILE].workspace.lock());
+            return true;
+        }
 
         // On the minimap: the view centres there, and follows a drag.
         if (const auto MAP = minimap(); MAP && MAP->box.containsPoint(POS)) {

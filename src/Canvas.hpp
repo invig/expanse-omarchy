@@ -33,6 +33,8 @@ namespace Expanse {
         double   scale = 1.0;
     };
 
+    constexpr double OVERVIEW_MAX_SCALE = 0.6; // zoomed out, windows are never drawn bigger than this
+
     std::optional<eDirection> parseDirection(const std::string& text);
 
     // The bottom-right overview on the canvas: every window as a block, the
@@ -48,6 +50,25 @@ namespace Expanse {
 
         CBox              toScreen(const CBox& canvas) const;
         Vector2D          toCanvas(const Vector2D& screen) const;
+    };
+
+    // Beside the minimap, as Expanse's Spaces bar: a tile per workspace on
+    // the canvas's monitor, each a small map of that workspace's windows.
+    // Only there with more than one workspace. Screen boxes are global logical.
+    struct SSpacesBar {
+        struct STile {
+            PHLWORKSPACEREF   workspace;
+            std::string       name;
+            CBox              box;     // the tile
+            CBox              screen;  // the monitor, in the tile
+            std::vector<CBox> windows; // in the tile
+            bool              current = false;
+            bool              hovered = false;
+        };
+        CBox                  box; // the panel
+        std::vector<STile>    tiles;
+
+        std::optional<size_t> tileAt(const Vector2D& pos) const;
     };
 
     class CCanvas {
@@ -67,6 +88,7 @@ namespace Expanse {
         void                   glideTo(PHLWINDOW window, bool fromKeyboard = false);
         void                   hop(eDirection direction);
         bool                   pickAt(const Vector2D& pos); // a click at a global logical point
+        void                   switchTo(PHLWORKSPACE workspace); // the canvas comes along, zoomed out
 
         // Camera, on the canvas
         void                   pan(const Vector2D& screenDelta); // moves the content by this much
@@ -105,6 +127,7 @@ namespace Expanse {
         void                   onWindowOpen(PHLWINDOW window);
         void                   onWindowClose(PHLWINDOW window);
         void                   onScreenChanged();
+        void                   onWorkspaceChanged(PHLWORKSPACE workspace);
         void                   simulateScreen(std::optional<Vector2D> size); // debugging: pretend the screen is this size
 
         // What's drawn
@@ -122,6 +145,7 @@ namespace Expanse {
         std::optional<CBox>    marquee() const;         // global logical
         const std::vector<Arrange::SGuide>& guides() const; // canvas
         std::optional<SMinimap> minimap() const;              // while the canvas is up
+        std::optional<SSpacesBar> spacesBar() const;          // while the canvas is up
 
         std::vector<PHLWINDOW> canvasWindows() const; // bottom to top
         CBox                   screenBox(PHLWINDOW window) const; // global logical, through the camera
@@ -183,7 +207,9 @@ namespace Expanse {
         void                   fitLayoutToScreen(double margin, bool tidy);
         void                   relayout();
         PHLWINDOW              topWindowInView(PHLWINDOW excluding) const;
+        void                   settle(const SCamera& camera);
         void                   commit();
+        void                   followWorkspace(PHLWORKSPACE workspace);
         std::vector<PHLWINDOW> selection() const;
         void                   clearSelection();
         void                   toggleSelected(PHLWINDOW window);
@@ -196,6 +222,7 @@ namespace Expanse {
         PHLWORKSPACEREF        m_workspace;
         PHLWINDOWREF           m_hover;
         PHLWINDOWREF           m_target;
+        PHLWORKSPACEREF        m_hoverSpace; // the workspaces bar tile under the pointer
 
         eState                 m_state        = STATE_IDLE;
         bool                   m_animating    = false;

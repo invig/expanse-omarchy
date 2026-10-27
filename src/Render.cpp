@@ -215,6 +215,42 @@ namespace Expanse::Render {
             addTexture(g_zoomText.tex, Vector2D{BOX.x + 10 * S, BOX.y + BOX.h - 7 * S - g_zoomText.tex->m_size.y}.round());
     }
 
+    static SText              g_spacesHeading;
+    static std::vector<SText> g_spaceNames;
+
+    // As the Spaces bar on the Mac: a panel like the minimap's, a tile per
+    // workspace (here a small map of it: the screen, its windows), the name
+    // underneath. The one you're on is outlined in the accent; the one under
+    // the pointer lights up.
+    static void addSpacesBar(const PHLMONITOR& monitor, const SSpacesBar& bar) {
+        const double S    = monitor->m_scale;
+        const int    LINE = std::max(1, sc<int>(std::round(S)));
+        const CBox   BOX  = toPixels(bar.box, monitor);
+        addRect(BOX, CHyprColor{0.12F, 0.12F, 0.12F, 0.88F}, std::round(12 * S));
+        addBorder(BOX.copy().expand(-LINE), CHyprColor{1.F, 1.F, 1.F, 0.08F}, LINE, std::round(12 * S) - LINE);
+
+        if (refresh(g_spacesHeading, "Workspaces", std::round(10 * S), 0, CHyprColor{1.F, 1.F, 1.F, 0.55F}, false))
+            addTexture(g_spacesHeading.tex, Vector2D{BOX.x + 12 * S, BOX.y + 9 * S}.round());
+
+        g_spaceNames.resize(bar.tiles.size());
+        for (size_t i = 0; i < bar.tiles.size(); ++i) {
+            const auto& tile  = bar.tiles[i];
+            const CBox  TILE  = toPixels(tile.box, monitor);
+            const float SHOWN = tile.current || tile.hovered ? 1.F : 0.85F;
+            const int   ROUND = std::round(6 * S);
+            addRect(TILE, CHyprColor{0.05F, 0.05F, 0.05F, SHOWN}, ROUND);
+            addRect(toPixels(tile.screen, monitor), CHyprColor{0.3F, 0.3F, 0.3F, 0.9F * SHOWN}, std::round(1.5 * S));
+            for (const auto& window : tile.windows)
+                addRect(toPixels(window, monitor), CHyprColor{0.85F, 0.85F, 0.85F, 0.8F * SHOWN}, std::round(S));
+
+            const int WIDTH = tile.current ? 2 * LINE : LINE;
+            addBorder(TILE.copy().expand(-WIDTH), tile.current ? ACCENT : CHyprColor{1.F, 1.F, 1.F, tile.hovered ? 0.7F : 0.15F}, WIDTH, ROUND - WIDTH);
+
+            if (refresh(g_spaceNames[i], tile.name, std::round(10 * S), std::round(TILE.w + 4 * S), CHyprColor{1.F, 1.F, 1.F, 0.8F}, false))
+                addTexture(g_spaceNames[i].tex, Vector2D{TILE.x + (TILE.w - g_spaceNames[i].tex->m_size.x) / 2, TILE.y + TILE.h + 7 * S}.round());
+        }
+    }
+
     static void hideCanvasWindows(PHLMONITOR monitor) {
         if (!g_canvas.drawsOn(monitor) || monitor->m_activeWorkspace != g_canvas.workspace())
             return;
@@ -266,6 +302,7 @@ namespace Expanse::Render {
         const auto GUIDES          = g_canvas.guides();
         const auto MARQUEE         = g_canvas.marquee();
         const auto MINIMAP         = g_canvas.minimap();
+        const auto SPACESBAR       = g_canvas.spacesBar();
         const bool DECORATED       = g_canvas.showsCanvas();
 
         const float DIM = DIM_ALPHA * sc<float>(g_canvas.zoomedOut());
@@ -319,6 +356,8 @@ namespace Expanse::Render {
 
         if (MINIMAP)
             addMinimap(MONITOR, *MINIMAP, g_canvas.scale());
+        if (SPACESBAR)
+            addSpacesBar(MONITOR, *SPACESBAR);
     }
 
     void onStage(eRenderStage stage) {
@@ -349,5 +388,7 @@ namespace Expanse::Render {
         g_labels.clear();
         g_closeGlyph = {};
         g_zoomText   = {};
+        g_spacesHeading = {};
+        g_spaceNames.clear();
     }
 }

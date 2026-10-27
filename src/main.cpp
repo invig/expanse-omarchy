@@ -8,11 +8,13 @@
 #include <vector>
 
 #include <hyprland/src/config/values/types/StringValue.hpp>
+#include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
+#include <hyprland/src/state/WorkspaceState.hpp>
 
 #include <lua.hpp>
 
@@ -91,7 +93,7 @@ static int luaHop(lua_State* L) {
     return 1;
 }
 
-static constexpr const char* USAGE = "usage: hyprctl expanse [state | toggle | open | close | hop <left|right|up|down> | focus <app> | pick <x> <y> | tidy | fit | "
+static constexpr const char* USAGE = "usage: hyprctl expanse [state | toggle | open | close | hop <left|right|up|down> | focus <app> | pick <x> <y> | space <name> | tidy | fit | "
                                      "zoom <scale> | pan <dx> <dy> | select all | restore | pause | resume | autocentre <on|off>]\n";
 
 static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
@@ -163,6 +165,17 @@ static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
             g_canvas.simulateScreen(Vector2D{w, h});
         else
             g_canvas.simulateScreen(std::nullopt);
+    } else if (verb == "space") {
+        // As clicking its tile on the workspaces bar: that workspace's canvas, zoomed out.
+        std::string name;
+        std::getline(words >> std::ws, name);
+        PHLWORKSPACE match;
+        for (const auto& workspace : State::workspaceState()->workspaces())
+            if (workspace && !workspace->inert() && !workspace->m_isSpecialWorkspace && workspace->m_name == name)
+                match = workspace.lock();
+        if (!match)
+            return std::format("no workspace named {}\n", name);
+        g_canvas.switchTo(match);
     } else if (verb == "select") {
         g_canvas.selectAll();
     } else if (verb == "autocentre" || verb == "autocenter") {
@@ -234,6 +247,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_listeners.push_back(events.window.openLate.listen([](PHLWINDOW window) { g_canvas.onWindowOpen(window); }));
     g_listeners.push_back(events.window.close.listen([](PHLWINDOW window) { g_canvas.onWindowClose(window); }));
     g_listeners.push_back(events.monitor.layoutChanged.listen([] { g_canvas.onScreenChanged(); }));
+    g_listeners.push_back(events.workspace.active.listen([](PHLWORKSPACE workspace) { g_canvas.onWorkspaceChanged(workspace); }));
 
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "overview", luaOverview);
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "hop", luaHop);
