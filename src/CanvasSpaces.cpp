@@ -189,5 +189,6 @@ namespace Expanse {
         m_returnCamera = m_camera;
         m_state        = STATE_OVERVIEW;
         setCamera(fitCamera(OVERVIEW_MAX_SCALE));
+        placeUnplaced();
     }
 }

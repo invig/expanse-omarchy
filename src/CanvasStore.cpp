@@ -302,6 +302,7 @@ namespace Expanse {
         saveNow();
         m_paused = true;
         reset();
+        m_unplaced.clear();
         putWindowsBack();
         m_originals.clear();
         m_pool.clear();
@@ -328,6 +329,7 @@ namespace Expanse {
         }
         m_originals.clear();
         m_pool.clear();
+        m_unplaced.clear();
     }
 
     void CCanvas::restoreOffscreen() {

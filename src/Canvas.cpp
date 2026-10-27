@@ -516,6 +516,18 @@ namespace Expanse {
         m_hover.reset();
         g_pHyprRenderer->damageMonitor(MONITOR);
         scheduleSave();
+        placeUnplaced();
+    }
+
+    void CCanvas::placeUnplaced() {
+        // Windows that opened while the canvas couldn't place them.
+        const auto WAITING = std::move(m_unplaced);
+        m_unplaced.clear();
+        for (const auto& ref : WAITING)
+            later([this, ref] {
+                if (const auto WINDOW = ref.lock(); WINDOW && !m_paused)
+                    placeNewWindow(WINDOW, nullptr);
+            });
     }
 
     // MARK: Windows
@@ -575,11 +587,13 @@ namespace Expanse {
             return;
 
         // On its own workspace, showing or not (a rule or an app can open it
-        // on another); with the canvas up, only on the canvas's.
-        if (live() && window->m_workspace != m_workspace.lock())
-            return;
-        SLookAt    here{*this, window->m_workspace};
-        const auto ANCHOR = topWindowInView(window);
+        // on another). With the canvas up on another workspace there's no
+        // view there to open it beside; it waits (placeNewWindow).
+        PHLWINDOW ANCHOR;
+        if (!live() || window->m_workspace == m_workspace.lock()) {
+            SLookAt here{*this, window->m_workspace};
+            ANCHOR = topWindowInView(window);
+        }
         // Out of the event: Hyprland is still mapping the window.
         later([this, ref = PHLWINDOWREF{window}, anchor = PHLWINDOWREF{ANCHOR}] {
             if (const auto WINDOW = ref.lock())
@@ -588,10 +602,14 @@ namespace Expanse {
     }
 
     void CCanvas::placeNewWindow(PHLWINDOW window, PHLWINDOW anchor) {
-        if (!window->m_isMapped || !window->m_workspace || window->m_workspace->m_isSpecialWorkspace || m_state == STATE_GLIDING)
+        if (!window->m_isMapped || !window->m_workspace || window->m_workspace->m_isSpecialWorkspace)
             return;
-        if (live() && window->m_workspace != m_workspace.lock())
+        // Mid-glide, or with the canvas up on another workspace: once the
+        // canvas is back at 100% (or showing its workspace).
+        if (m_state == STATE_GLIDING || (live() && window->m_workspace != m_workspace.lock())) {
+            m_unplaced.emplace_back(window);
             return;
+        }
 
         const auto TARGET = window->layoutTarget();
         if (!TARGET)

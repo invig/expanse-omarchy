@@ -202,6 +202,7 @@ namespace Expanse {
         void                   moveWindow(PHLWINDOW window, const Vector2D& canvasPos);
         void                   raise(PHLWINDOW window);
         void                   placeNewWindow(PHLWINDOW window, PHLWINDOW anchor);
+        void                   placeUnplaced();
         Vector2D               scrolledFor(const PHLWORKSPACE& workspace) const;
         void                   noteOriginal(PHLWINDOW window);
         void                   followWorkspaces();
@@ -305,6 +306,7 @@ namespace Expanse {
         wl_event_source*            m_saveTimer = nullptr;
 
         std::vector<PHLWINDOWREF> m_selected;
+        std::vector<PHLWINDOWREF> m_unplaced; // opened while the canvas couldn't place them
 
         // A full-screen window leaves full screen while the canvas is up
         // (Hyprland hides everything under it), and gets it back if you leave
