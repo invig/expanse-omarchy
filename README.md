@@ -74,7 +74,7 @@ dofile("/path/to/expanse-hypr/examples/expanse.lua")
 
 [examples/expanse.lua](examples/expanse.lua) floats every window from its first frame (a window rule; without it, a tiled window floats where it is when the canvas first touches it) and binds <kbd>Alt</kbd> + <kbd>`</kbd>, <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>`</kbd> and <kbd>Super</kbd> + arrows, with descriptions for Omarchy's key guide. `hl.plugin.expanse.overview()`, `hop("left")`, `tidy()` and `auto_centre()` return their actions, like `hl.dsp.*`, so they work in `hl.bind` and `hyprctl dispatch` alike.
 
-The hot corner is `plugin:expanse:hot_corner`: `bottom` (both bottom corners, the default, since Omarchy's bar has its menu top left), `all`, `top_left`, `top_right`, `bottom_left`, `bottom_right` or `off`. `plugin:expanse:wallpaper = false` puts the canvas on a plain background instead of the dimmed desktop picture:
+The hot corner is `plugin:expanse:hot_corner`: `bottom` (both bottom corners, the default, since Omarchy's bar has its menu top left), `all`, `top_left`, `top_right`, `bottom_left`, `bottom_right` or `off`. As on the Mac, it fires when you move into a corner: not when a monitor going away leaves the pointer in one. `plugin:expanse:wallpaper = false` puts the canvas on a plain background instead of the dimmed desktop picture:
 
 ```lua
 hl.config({ plugin = { expanse = { hot_corner = "all", wallpaper = false } } })

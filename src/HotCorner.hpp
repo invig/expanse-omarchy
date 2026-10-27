@@ -2,6 +2,7 @@
 
 #include <hyprutils/math/Vector2D.hpp>
 
+#include <chrono>
 #include <functional>
 #include <optional>
 #include <string>
@@ -23,6 +24,9 @@ namespace Expanse {
 
         void                  onMouseMove(const Hyprutils::Math::Vector2D& pos);
         void                  onButton(bool pressed);
+        // The screens changed: the pointer may now sit in a corner it never
+        // moved into. It fires again once the pointer has left the corner.
+        void                  disarm();
         void                  stop();
         std::string           describe() const; // for hyprctl expanse
 
@@ -30,10 +34,11 @@ namespace Expanse {
         bool                        inCorner(const Hyprutils::Math::Vector2D& pos) const;
         void                        fire();
 
-        Hyprutils::Math::Vector2D   m_pos;
-        bool                        m_armed   = true;
-        int                         m_buttons = 0;
-        wl_event_source*            m_dwell   = nullptr;
+        Hyprutils::Math::Vector2D             m_pos;
+        bool                                  m_armed   = false; // until the pointer is first seen out of a corner
+        int                                   m_buttons = 0;
+        wl_event_source*                      m_dwell   = nullptr;
+        std::chrono::steady_clock::time_point m_quietUntil; // after a screen change, moves don't arm it yet
     };
 
     inline CHotCorner g_hotCorner;

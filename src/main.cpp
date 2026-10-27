@@ -327,9 +327,15 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_listeners.push_back(events.window.active.listen([](PHLWINDOW window, Desktop::eFocusReason reason) { g_canvas.onFocus(window, reason); }));
     g_listeners.push_back(events.window.openLate.listen([](PHLWINDOW window) { g_canvas.onWindowOpen(window); }));
     g_listeners.push_back(events.window.close.listen([](PHLWINDOW window) { g_canvas.onWindowClose(window); }));
-    g_listeners.push_back(events.monitor.layoutChanged.listen([] { g_canvas.onScreenChanged(); }));
+    g_listeners.push_back(events.monitor.layoutChanged.listen([] {
+        g_hotCorner.disarm();
+        g_canvas.onScreenChanged();
+    }));
     for (auto* event : {&events.monitor.preAdded, &events.monitor.added, &events.monitor.preRemoved, &events.monitor.removed})
-        g_listeners.push_back(event->listen([](PHLMONITOR) { g_canvas.onScreenChanged(); }));
+        g_listeners.push_back(event->listen([](PHLMONITOR) {
+            g_hotCorner.disarm();
+            g_canvas.onScreenChanged();
+        }));
     g_listeners.push_back(events.workspace.active.listen([](PHLWORKSPACE workspace) { g_canvas.onWorkspaceChanged(workspace); }));
 
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "overview", luaOverview);

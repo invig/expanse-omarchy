@@ -15,6 +15,7 @@ namespace Expanse {
 
     constexpr double TOLERANCE = 3.0;  // logical px from the very corner
     constexpr int    DWELL_MS  = 60;   // resting there this long
+    constexpr int    QUIET_MS  = 1500; // after a screen change, while Hyprland moves the pointer about
 
     std::string CHotCorner::corner() const {
         static auto PCORNER = CConfigValue<Config::STRING>("plugin:expanse:hot_corner");
@@ -52,7 +53,8 @@ namespace Expanse {
         m_pos = pos;
         if (!inCorner(pos) || m_buttons > 0) {
             // Out of the corner (or dragging): it arms again.
-            m_armed = true;
+            if (std::chrono::steady_clock::now() >= m_quietUntil)
+                m_armed = true;
             stop();
             return;
         }
@@ -77,6 +79,15 @@ namespace Expanse {
         m_armed = false;
         if (onTrigger)
             onTrigger();
+    }
+
+    void CHotCorner::disarm() {
+        // As on the Mac, a corner fires when you move into it: not when a
+        // monitor goes away and leaves the pointer there, and the next window
+        // closing (Hyprland re-sends the pointer's position) zooms out.
+        stop();
+        m_armed      = false;
+        m_quietUntil = std::chrono::steady_clock::now() + std::chrono::milliseconds(QUIET_MS);
     }
 
     void CHotCorner::onButton(bool pressed) {
