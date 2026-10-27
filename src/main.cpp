@@ -1,6 +1,7 @@
 #define WLR_USE_UNSTABLE
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <format>
 #include <sstream>
@@ -97,7 +98,7 @@ static int luaHop(lua_State* L) {
 static constexpr const char* USAGE =
     "usage: hyprctl expanse [state | toggle | open | close | hop <left|right|up|down> | focus <app> | pick <x> <y> | space <name> | tidy | fit | zoom <scale> | "
     "pan <dx> <dy> | select all | restore | pause [toggle] | resume | autocentre <on|off|toggle> | wallpaper <on|off|toggle|default> | "
-    "corner [off|all|bottom|top_left|top_right|bottom_left|bottom_right|default] | keys]\n";
+    "corner [off|all|bottom|top_left|top_right|bottom_left|bottom_right|default] | keys | screen [<w> <h>] | pinch <scale>...]\n";
 
 // The canvas's own keys (binds are in Omarchy's key guide), for the menu's Shortcuts.
 static constexpr const char* KEYS = R"(Expanse
@@ -234,6 +235,19 @@ static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
             return std::format("no workspace named {}\n", name);
         if (!g_canvas.switchTo(match))
             return std::format("workspace {} isn't on the canvas's monitor\n", name);
+    } else if (verb == "pinch") {
+        // Debugging: a two-finger pinch through Hyprland's own input path, as
+        // a touchpad's arrives from libinput, through these scales.
+        std::vector<double> scales;
+        for (double scale = 0; words >> scale;)
+            scales.push_back(scale);
+        if (scales.empty())
+            return USAGE;
+        const auto NOW = [] { return sc<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()); };
+        g_pInputManager->onPinchBegin({.timeMs = NOW(), .fingers = 2});
+        for (const double scale : scales)
+            g_pInputManager->onPinchUpdate({.timeMs = NOW(), .fingers = 2, .scale = scale});
+        g_pInputManager->onPinchEnd({.timeMs = NOW()});
     } else if (verb == "select") {
         g_canvas.selectAll();
     } else if (verb == "autocentre" || verb == "autocenter") {
