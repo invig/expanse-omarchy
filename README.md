@@ -98,14 +98,14 @@ Rebuild after every Hyprland update: plugins are tied to the exact Hyprland buil
 
 `hyprctl expanse` prints the canvas as JSON. `hyprctl expanse` with `toggle`, `open`, `close`, `tidy`, `fit`, `zoom <scale>`, `pan <dx> <dy>`, `hop <left|right|up|down>`, `focus <app>` (or `focus address:0x…`, from `hyprctl clients`), `space <name>` (that workspace's canvas, zoomed out), `select all`, `restore` (every window back into view), `pause [toggle]`, `resume`, `autocentre <on|off|toggle>`, `wallpaper <on|off|toggle|default>`, `corner [<corner>|default]` (no corner prints the hot corner's state) or `keys` (the canvas's keys) drives it, and `pick <x> <y>` clicks the canvas at a global logical point. For debugging, `screen <w> <h>` pretends the screen is that size (no size for the real one), and `pinch <scale>…` sends a two-finger pinch through Hyprland's own input path, as a touchpad would. In Lua, `hl.plugin.expanse.pause()` toggles pausing and `restore()` brings windows back into view.
 
-[scripts/sweep.py](scripts/sweep.py) goes through the features above in a Try Omarchy VM, with real keyboard and pointer input, and checks each from the plugin's state (41 checks). `make test` checks the nearest-window rule and the layout file case by case. The nearest-window rule, snapping, tidy-up, free-space placement and the layout for a smaller screen were also checked against Expanse's own Swift on thousands of random layouts, with no differences.
+[scripts/sweep.py](scripts/sweep.py) goes through everything this README says, in a Try Omarchy VM, and checks each from the plugin's state: 75 checks, with real keyboard and pointer input through QMP, pinches from a virtual touchpad ([scripts/touchpad.py](scripts/touchpad.py), through the kernel's uinput and libinput, as a real one; it needs root in the VM, given with `VM_ASKPASS`), a second monitor (a headless output), a dialog ([scripts/dialog.py](scripts/dialog.py)), and the plugin unloaded mid-glide, zoomed out, mid-drag and as windows open. `make test` checks the nearest-window rule and the layout file case by case. The nearest-window rule, snapping, tidy-up, free-space placement and the layout for a smaller screen were also checked against Expanse's own Swift on thousands of random layouts, with no differences.
 
 [scripts/vm.sh](scripts/vm.sh) syncs, builds and reloads the plugin in a Try Omarchy VM over SSH. [scripts/qmp-input.py](scripts/qmp-input.py) presses keys and moves and clicks the VM's real pointer through QEMU's QMP socket; a virtual keyboard (`wtype`) can't trigger Hyprland keybinds. `hyprctl output create headless` adds a second monitor to test with (the QMP pointer reaches it), and `hyprctl output remove` unplugs it.
 
-## Limitations
+## As on the Mac
 
-- **Zoomed out, keys go to the canvas, not to apps.** As on the Mac. Here it's a choice rather than a limit: the windows are live surfaces, so typing into one zoomed out could be added.
-- **Pinch is tested through Hyprland's input path, not on a touchpad.** The test VM has none; `hyprctl expanse pinch` covers everything from libinput on.
+- **Zoomed out, keys go to the canvas, not to apps**: they move the highlight, zoom and tidy. Click a window (or press <kbd>Return</kbd>) to use it.
+- **One canvas per monitor.** Expanse on the Mac manages one display; here each monitor's workspace is a canvas of its own (see above).
 
 ## Credits
 

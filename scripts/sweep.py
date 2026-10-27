@@ -64,12 +64,16 @@ def wait(seconds=1.6):
     time.sleep(seconds)
 
 
-def settle(timeout=8):
-    # Until the canvas is back at 100% (frames crawl while the VM window is hidden).
+def settle(timeout=10):
+    # Until the canvas is back at 100% and stays there: a glide asked for a
+    # moment ago may not have started yet (frames crawl while the VM window is
+    # hidden).
     end = time.time() + timeout
     while time.time() < end:
         if ctl()["state"] == "idle":
-            return True
+            time.sleep(0.8)
+            if ctl()["state"] == "idle":
+                return True
         time.sleep(0.4)
     return False
 
@@ -121,7 +125,8 @@ def gap(a, b):
 
 
 def real():
-    return {c["class"]: c["at"] + c["size"] for c in json.loads(vm("hyprctl clients -j")) if c["class"] in APPS}
+    # Every window this run opened, by app id.
+    return {c["class"]: c["at"] + c["size"] for c in json.loads(vm("hyprctl clients -j")) if c["class"].startswith("sweep-") and c["class"].endswith(RUN)}
 
 
 def screen_middle():
@@ -373,6 +378,348 @@ wait(1)
 check("leaving without picking another puts it back in full screen", fs() == 2)
 vm('hyprctl dispatch "hl.dsp.window.fullscreen()"')
 wait(1)
+
+# ===== The README's other claims.
+A, B = APPS[0], APPS[1]
+D, E, F, G = (f"sweep-{name}-{RUN}" for name in ("d", "e", "f", "g"))
+DIALOG = f"org.expanse.Sweep{RUN}"
+hyprland = vm("pgrep -x Hyprland").strip()
+reports = vm("ls ~/.cache/hyprland | wc -l").strip()
+
+
+def clients():
+    return json.loads(vm("hyprctl clients -j"))
+
+
+def client(match):
+    return next((c for c in clients() if match in (c["class"], c["title"])), None)
+
+
+def open_app(app, size="700 440", workspace=None):
+    rule = f'float = true, size = \\"{size}\\"' + (f', workspace = \\"{workspace} silent\\"' if workspace else "")
+    vm(f'hyprctl dispatch "hl.dsp.exec_cmd(\\"foot --app-id={app} sleep infinity\\", {{ {rule} }})"')
+    wait(2.4)
+
+
+def move_by(app, dx, dy):
+    vm(f'hyprctl dispatch "hl.dsp.window.move({{ x = {int(dx)}, y = {int(dy)}, relative = true, window = \\"class:{app}\\" }})"')
+    wait(0.8)
+
+
+def focus(app):
+    vm(f'hyprctl dispatch "hl.dsp.focus({{ window = \\"class:{app}\\" }})"')
+
+
+def active():
+    return json.loads(vm("hyprctl activewindow -j")).get("class")
+
+
+def cursor():
+    x, y = vm("hyprctl cursorpos").split(",")
+    return float(x), float(y)
+
+
+def inside(p, b, margin=0):
+    return b[0] - margin <= p[0] <= b[0] + b[2] + margin and b[1] - margin <= p[1] <= b[1] + b[3] + margin
+
+
+def centred(b):
+    middle = screen_middle()
+    return abs(centre(b)[0] - middle[0]) <= 2 and abs(centre(b)[1] - middle[1]) <= 2
+
+
+def pixel(x, y):
+    return vm(f'grim -g "{int(x)},{int(y)} 1x1" -s 1 /tmp/sweep-pixel.png && magick /tmp/sweep-pixel.png -format "%[hex:p{{0,0}}]" info:').strip()
+
+
+def canvas_of(app):
+    return box(mine()[app]) if app in mine() else None
+
+
+def empty_spot(state, avoid_corner=True):
+    for x in range(80, W - 400, 60):
+        for y in range(120, H - 320, 60):
+            if not any(inside((x, y), w["screen"], 30) for w in state["windows"]):
+                return x, y
+    return None
+
+
+# The saved layout keeps titles only as a hash.
+saved = json.loads(vm("cat ~/.local/state/expanse/layout.json"))
+check("the saved layout keeps window titles only as a hash", all(w["title"] == "" or w["title"].startswith("fnv1a:") for w in saved["windows"]))
+
+# A window its app opens again goes back to its spot on the canvas.
+spot = canvas_of(B)
+vm(f"kill {client(B)['pid']}")
+wait(2)
+open_app(B, "800 500")
+settle()
+check("a window its app opens again returns to its spot", canvas_of(B) == spot, f"{spot} -> {canvas_of(B)}")
+
+# Lua functions return actions, for binds and hyprctl dispatch alike.
+vm('hyprctl dispatch "hl.plugin.expanse.overview()"')
+wait()
+check("hl.plugin.expanse.overview() zooms out", ctl()["state"] in ("opening", "overview"))
+vm('hyprctl dispatch "hl.plugin.expanse.overview()"')
+check("and back", settle())
+vm('hyprctl dispatch "hl.plugin.expanse.tidy()"')
+wait(2.5)
+check("hl.plugin.expanse.tidy() tidies on the canvas", ctl()["state"] == "overview" and not any_overlap([box(w) for w in mine().values()]))
+qmp("key", "esc")
+settle()
+
+# Ctrl + arrows stay with apps.
+focus(A)
+settle()
+before = real()
+qmp("key", "ctrl+right", "sleep", 600)
+check("Ctrl + arrows are left to apps", ctl()["state"] == "idle" and real() == before and active() == A)
+
+# A row of three: a hop lands the pointer on the window, and a hop pressed mid-glide hops on.
+open_app(D, "700 440")
+settle()
+r = real()
+row_y = r[A][1]
+move_by(B, r[A][0] + r[A][2] + 120 - r[B][0], row_y - r[B][1])
+r = real()
+move_by(D, r[B][0] + r[B][2] + 120 - r[D][0], row_y - r[D][1])
+focus(A)
+settle()
+qmp("key", "meta_l+right")
+settle()
+check("Super + arrow lands the pointer on the window it hops to", active() == B and inside(cursor(), real()[B]), f"{active()} {cursor()} {real().get(B)}")
+focus(A)
+settle()
+qmp("key", "meta_l+right", "sleep", 60, "key", "meta_l+right")
+settle()
+check("a hop pressed mid-glide hops on from where the glide is heading", active() == D, active())
+
+# Focus that follows the mouse never moves the canvas; a click centres; the pointer stays put.
+r = real()
+move_by(B, W - 260 - r[B][0], 0)
+before = real()
+peek = (W - 120, centre(before[B])[1])
+point(*peek)
+wait(1.5)
+check("focus that follows the mouse never moves the canvas", real() == before and ctl()["state"] == "idle")
+qmp("click")
+settle()
+check("clicking a window partly off screen centres it", centred(real()[B]), f"{real()[B]}")
+check("and leaves the pointer where you clicked", abs(cursor()[0] - peek[0]) <= 2 and abs(cursor()[1] - peek[1]) <= 2, f"{cursor()} vs {peek}")
+
+# Keyboard focus centres a window that isn't fully on screen; with auto-centre off it doesn't.
+point(W / 2, H / 2)
+r = real()
+move_by(D, W - 200 - r[D][0], 0)
+focus(A)
+settle()
+focus(D)
+settle()
+check("keyboard focus centres a window that isn't fully on screen", centred(real()[D]), f"{real()[D]}")
+ctl("autocentre off")
+r = real()
+move_by(D, W - 200 - r[D][0], 0)
+focus(A)
+wait(1)
+before = real()
+focus(D)
+wait(2)
+check("with auto-centre off it leaves the canvas where it is", real() == before and active() == D)
+ctl("autocentre on")
+
+# The plain background.
+zoom_out()
+spot = empty_spot(ctl())
+with_picture = pixel(*spot)
+ctl("wallpaper off")
+wait(1)
+plain = pixel(*spot)
+check("plugin:expanse:wallpaper off puts the canvas on a plain background", plain != with_picture and plain.upper().startswith(("212121", "202020", "222222")), f"{with_picture} -> {plain}")
+ctl("wallpaper default")
+qmp("key", "esc")
+settle()
+
+# The hot corner can be turned off.
+ctl("corner off")
+point(W / 2, H / 2)
+qmp("move", 1, H - 1, W, H, "sleep", 80, "move", 0, H, W, H, "sleep", 900)
+check("hot corner off: resting in a corner does nothing", ctl()["state"] == "idle")
+ctl("corner default")
+point(W / 2, H / 2)
+
+# Full screen: pick another window and it stays where it is.
+focus(A)
+settle()
+vm('hyprctl dispatch "hl.dsp.window.fullscreen()"')
+wait(1.5)
+zoom_out()
+point(*centre(mine()[B]["screen"]))
+qmp("click")
+settle()
+wait(1)
+check("picking another window leaves a full-screen one where it is on the canvas", fs() == 0 and active() == B, f"{fs()} {active()}")
+
+# The workspaces bar, and following a workspace bind while zoomed out.
+other = str(int(WORKSPACE) + 1)
+open_app(E, "700 440", other)
+zoom_out()
+tiles = {t["name"]: t["tile"] for t in ctl()["spaces"]}
+tile = tiles.get(f"Workspace {other}")
+if tile:
+    point(tile[0] + tile[2] / 2, tile[1] + tile[3] / 2)
+    qmp("click")
+    wait(2.5)
+s = ctl()
+check("clicking a workspace tile goes to its canvas, still zoomed out", bool(tile) and s["workspace"] == other and s["state"] == "overview", f"{s['workspace']} {s['state']} {list(tiles)}")
+qmp("key", f"meta_l+{WORKSPACE}")
+wait(2.5)
+s = ctl()
+check("a workspace bind while zoomed out brings the canvas along", s["workspace"] == WORKSPACE and s["state"] == "overview", f"{s['workspace']} {s['state']}")
+qmp("key", "esc")
+settle()
+
+# A new window whose nearest free spot is off screen: the canvas glides there.
+ctl("screen 900 600")
+wait(2.5)
+open_app(F, "700 440")
+settle()
+f = real().get(F, [0, 0, 0, 0])
+area = json.loads(vm("hyprctl monitors -j"))[0]
+check("a new window opened off screen is glided to", 0 <= f[0] and f[0] + f[2] <= 900 and area["reserved"][1] <= f[1] and f[1] + f[3] <= area["reserved"][1] + 600, f"{f}")
+ctl("screen")
+wait(2.5)
+
+# Dialogs keep the spot their app gives them.
+vm(f"setsid python3 /home/test/expanse-hypr/scripts/dialog.py {DIALOG} >/dev/null 2>&1 &")
+wait(5)
+dialog, parent = client("dialog-child"), client("dialog-parent")
+wait(1.5)
+again = client("dialog-child")
+check("a dialog keeps the spot its app gives it", bool(dialog) and bool(again) and again["at"] == dialog["at"], f"{dialog and dialog['at']} {again and again['at']}")
+if parent:
+    vm(f"kill {parent['pid']}")
+    wait(1)
+
+# The Omarchy menu rows.
+rows = json.loads("\n".join(line for line in open(os.path.join(HERE, "..", "examples", "omarchy-menu.jsonc")) if not line.strip().startswith("//")))
+verbs = {"toggle", "tidy", "restore", "autocentre", "wallpaper", "pause", "corner"}
+actions_ok = all(r.get("action", "hyprctl expanse tidy").split()[2] in verbs if r.get("action", "").startswith("hyprctl expanse") else r["action"].startswith("omarchy-launch-")
+                 for r in rows.values() if "action" in r)
+checked_ok = all(subprocess.run(SSH + [ENV + r["checked"]], capture_output=True).returncode in (0, 1) for r in rows.values() if "checked" in r)
+check("the Omarchy menu rows parse, and their actions and checks run", actions_ok and checked_ok)
+
+# ===== A touchpad, through the kernel and libinput (needs root in the VM for /dev/uinput).
+ASKPASS = os.environ.get("VM_ASKPASS")
+
+
+def touchpad(start, end, seconds=0.6):
+    sudo = f"SUDO_ASKPASS={ASKPASS} sudo -A" if ASKPASS else "sudo -n"
+    return subprocess.run(SSH + [f"{sudo} python3 -I /home/test/expanse-hypr/scripts/touchpad.py pinch {start} {end} {seconds}"], capture_output=True).returncode == 0
+
+
+state = ctl()
+spot = empty_spot(state)
+point(*spot)
+if touchpad(0.5, 0.25):
+    s = ctl()
+    check("touchpad: pinching in on the desktop zooms out with the fingers", s["state"] == "overview" and s["scale"] < 0.75, f"{s['state']} {s['scale']}")
+    before = ctl()["scale"]
+    touchpad(0.25, 0.5)
+    check("touchpad: spreading the fingers zooms in", ctl()["scale"] > before * 1.4, f"{before} -> {ctl()['scale']}")
+    qmp("key", "esc")
+    settle()
+    point(*centre(real()[B]))
+    touchpad(0.5, 0.4, 0.4)
+    check("touchpad: a pinch over a window is the app's", ctl()["state"] == "idle")
+    qmp("hold", "alt", "sleep", 150)
+    touchpad(0.5, 0.3)
+    qmp("let", "alt", "sleep", 600)
+    check("touchpad: Alt + pinching in over a window zooms out", ctl()["state"] == "overview")
+    qmp("key", "esc")
+    settle()
+else:
+    print("SKIP  touchpad (no root in the VM: set VM_ASKPASS to an askpass program there)")
+
+# ===== Several monitors (a headless one beside the screen).
+vm("hyprctl output create headless SWEEP-2")
+wait(3)
+W, H = layout()
+second = next(m for m in json.loads(vm("hyprctl monitors -j")) if m["name"] == "SWEEP-2")
+sx, sy = second["x"], second["y"]
+sw, sh = second["width"] / second["scale"], second["height"] / second["scale"]
+point(W / 4, H / 2)
+focus(B)
+settle()
+r = real()
+move_by(A, sx + 200 - r[A][0], sy + 150 - r[A][1])
+a = real()[A]
+body = pixel(*centre(real()[B]))
+there = pixel(*centre(a))
+check("several monitors: a window parked over the other monitor isn't drawn there", there != body, f"{there} vs {body}")
+point(*centre(a))
+check("and doesn't take the pointer's focus there", active() != A, active())
+point(W / 4, H / 2)
+focus(A)
+settle()
+a = real()[A]
+check("keyboard focus brings it back to the middle of its own monitor", centred(a), f"{a}")
+point(sx + sw / 2, sy + sh / 2)
+before = real()
+zoom_out()
+s = ctl()
+check("the canvas opens on the monitor with the pointer", s["workspace"] == second["activeWorkspace"]["name"], f"{s['workspace']}")
+qmp("key", "esc")
+settle()
+check("and closes without moving anything", real() == before)
+point(W / 4, H / 2)
+zoom_out()
+point(sx + sw / 2, sy + sh / 2)
+qmp("click")
+check("a click on the other monitor closes the canvas", settle())
+open_app(G, "600 380", second["activeWorkspace"]["name"])
+g = real()[G]
+vm("hyprctl output remove SWEEP-2")
+wait(3)
+gone = real()[G]
+check("unplugging a monitor keeps its windows' places on the screen", gone[0] == g[0] - sx and gone[1] == g[1] - sy, f"{g} -> {gone}")
+vm("hyprctl output create headless SWEEP-2")
+wait(3.5)
+back = real()[G]
+check("plugging it back in puts them back exactly", back == g, f"{g} -> {back}")
+vm("hyprctl output remove SWEEP-2")
+wait(2)
+W, H = layout()
+point(W / 2, H / 2)
+
+# ===== Unloading in the middle of things.
+UNLOAD = "hyprctl plugin unload ~/expanse-hypr/expanse.so >/dev/null; hyprctl plugin load ~/expanse-hypr/expanse.so >/dev/null"
+for _ in range(4):
+    qmp("key", "meta_l+right")
+    vm(UNLOAD)
+    wait(0.8)
+for _ in range(3):
+    zoom_out()
+    vm(UNLOAD)
+    wait(0.8)
+for i in range(3):
+    vm(f'hyprctl dispatch "hl.dsp.exec_cmd(\\"foot --app-id={G}-{i} sleep infinity\\", {{ float = true }})" >/dev/null; sleep 0.15; {UNLOAD}')
+    wait(1.5)
+for _ in range(2):
+    zoom_out()
+    vm('hyprctl dispatch "hl.dsp.cursor.move({ x = 600, y = 400 })"')
+    qmp("press", "sleep", 150)
+    vm('hyprctl dispatch "hl.dsp.cursor.move({ x = 640, y = 400 })"')
+    vm(UNLOAD)
+    qmp("release", "sleep", 300)
+    qmp("key", "esc")
+    settle()
+check("unloading mid-glide, zoomed out, mid-drag and as windows open never crashes Hyprland",
+      vm("pgrep -x Hyprland").strip() == hyprland and vm("ls ~/.cache/hyprland | wc -l").strip() == reports)
+
+for c in clients():
+    if c["class"].startswith(f"sweep-") and c["class"].endswith(RUN) or c["class"].startswith(f"{G}-") or c["class"] == DIALOG:
+        vm(f"kill {c['pid']}")
+APPS += [D, E, F, G]
 
 # --- Clean up.
 for c in json.loads(vm("hyprctl clients -j")):
