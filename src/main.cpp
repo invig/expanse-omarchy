@@ -347,6 +347,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_listeners.push_back(events.window.openLate.listen([](PHLWINDOW window) {
         g_canvas.onWindowOpen(window);
         g_canvas.damageDesktopMaps();
+        Expanse::Render::prepareLabels();
     }));
     g_listeners.push_back(events.window.close.listen([](PHLWINDOW window) {
         g_canvas.onWindowClose(window);
@@ -356,6 +357,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_listeners.push_back(events.monitor.layoutChanged.listen([] {
         g_hotCorner.disarm();
         g_canvas.onScreenChanged();
+        Expanse::Render::prepareLabels(); // a new scale, new sizes
     }));
     for (auto* event : {&events.monitor.preAdded, &events.monitor.added, &events.monitor.preRemoved, &events.monitor.removed})
         g_listeners.push_back(event->listen([](PHLMONITOR) {
@@ -380,7 +382,10 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_ctlCommand = HyprlandAPI::registerHyprCtlCommand(PHANDLE, SHyprCtlCommand{.name = "expanse", .exact = false, .fn = ctlCommand});
 
     // The canvas comes back where it was, once Hyprland has finished loading us.
-    later([] { g_canvas.restoreCanvas(); });
+    later([] {
+        g_canvas.restoreCanvas();
+        Expanse::Render::prepareLabels();
+    });
 
     return {"expanse", "Expanse: an infinite, zoomable canvas for your windows", "Matthew Salmon", "0.3.0"};
 }

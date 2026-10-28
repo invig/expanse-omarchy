@@ -16,13 +16,22 @@ namespace Expanse::Perf {
 
     void        frameStart(const PHLMONITOR& monitor); // render.pre
     void        frameEnd();                            // the pass has drawn
-    void        textRendered();
 
     // The plugin's own share of the frame being drawn: the time this lives.
     class CPluginTime {
       public:
         CPluginTime();
         ~CPluginTime();
+
+      private:
+        std::chrono::steady_clock::time_point m_start;
+    };
+
+    // Text made for the frame being drawn: one more, and the time this lives.
+    class CTextTime {
+      public:
+        CTextTime();
+        ~CTextTime();
 
       private:
         std::chrono::steady_clock::time_point m_start;

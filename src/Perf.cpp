@@ -24,6 +24,7 @@ namespace Expanse::Perf {
         double plugin   = 0; // of which the plugin's own, ms
         double gpu      = 0; // then waiting for the GPU to finish it, ms (only with "gpu")
         int    texts    = 0; // text textures made
+        double text     = 0; // making them, ms (part of the plugin's)
     };
 
     struct SMonitor {
@@ -96,9 +97,13 @@ namespace Expanse::Perf {
         g_current = nullptr;
     }
 
-    void textRendered() {
-        if (g_recording && g_current)
-            ++g_frame.texts;
+    CTextTime::CTextTime() : m_start(Clock::now()) {}
+
+    CTextTime::~CTextTime() {
+        if (!g_recording || !g_current)
+            return;
+        ++g_frame.texts;
+        g_frame.text += since(m_start);
     }
 
     CPluginTime::CPluginTime() : m_start(Clock::now()) {}
@@ -121,16 +126,18 @@ namespace Expanse::Perf {
         std::string out;
         for (auto& [name, monitor] : g_monitors) {
             monitor.listener.reset();
-            std::vector<double> start, cpu, plugin, gpu, texts;
+            std::vector<double> start, cpu, plugin, gpu, texts, text;
             for (const auto& frame : monitor.frames) {
                 start.push_back(frame.start);
                 cpu.push_back(frame.cpu);
                 plugin.push_back(frame.plugin);
                 gpu.push_back(frame.gpu);
                 texts.push_back(frame.texts);
+                text.push_back(frame.text);
             }
-            out += std::format(R"({}"{}":{{"refresh":{:.2f},"start":[{}],"cpu":[{}],"plugin":[{}],"gpu":[{}],"texts":[{}],"presented":[{}]}})", out.empty() ? "" : ",",
-                               name, monitor.refresh, numbers(start), numbers(cpu), numbers(plugin), numbers(gpu), numbers(texts), numbers(monitor.presented));
+            out += std::format(R"({}"{}":{{"refresh":{:.2f},"start":[{}],"cpu":[{}],"plugin":[{}],"gpu":[{}],"texts":[{}],"text":[{}],"presented":[{}]}})",
+                               out.empty() ? "" : ",", name, monitor.refresh, numbers(start), numbers(cpu), numbers(plugin), numbers(gpu), numbers(texts), numbers(text),
+                               numbers(monitor.presented));
         }
         g_monitors.clear();
         return "{" + out + "}\n";

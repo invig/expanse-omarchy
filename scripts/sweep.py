@@ -63,6 +63,11 @@ for c in json.loads(vm("hyprctl clients -j")):
     if c["class"].startswith(("sweep-", "org.expanse.Sweep")):
         vm(f"kill {c['pid']}")
 
+# Without the plugin answering, the run would drive the VM's own screen
+# (its windows, its workspaces): it stops before touching anything.
+if "error" in ctl():
+    sys.exit(f"hyprctl expanse doesn't answer ({ctl()['error']}): load the plugin first")
+
 # The sweep runs on a monitor of its own. Virtual-1 follows the VM's window
 # on the Mac (moving or resizing that changes the screen mid-run); a headless
 # output doesn't. Both are pinned, Virtual-1 at 0, 0 and the test monitor
@@ -79,6 +84,11 @@ vm(f"hyprctl output create headless {MON}")
 time.sleep(3)
 # However the run ends: the test monitor goes, and Virtual-1's own rule comes back.
 atexit.register(lambda: (vm(f"hyprctl output remove {MON}"), time.sleep(1), vm("hyprctl reload")))
+# Another monitor left behind (by a run cut short) would take the pointer off
+# where the run expects it, onto the VM's own screen.
+NAMES = sorted(m["name"] for m in json.loads(vm("hyprctl monitors -j")))
+if NAMES != sorted(["Virtual-1", MON]):
+    sys.exit(f"monitors {NAMES}, not Virtual-1 and {MON}: remove the others first (hyprctl output remove NAME)")
 
 
 def test_monitor():

@@ -71,7 +71,7 @@ def report(name, data):
           f"draw p50 {percentile(cpu, 50):5.1f} p95 {percentile(cpu, 95):5.1f} max {max(cpu, default=0):6.1f}  "
           f"plugin p50 {percentile(plugin, 50):4.1f} max {max(plugin, default=0):5.1f}  "
           + (f"gpu p50 {percentile(gpu, 50):5.1f} p95 {percentile(gpu, 95):5.1f} max {max(gpu, default=0):6.1f}  " if GPU else "")
-          + f"ms  texts {int(sum(texts))}")
+          + f"ms  texts {int(sum(texts))}" + (f" ({sum(mon['text']):.1f} ms, max {max(mon['text'], default=0):.1f} in a frame)" if "text" in mon else ""))
 
 
 def measure(name, commands, settle=1.0):

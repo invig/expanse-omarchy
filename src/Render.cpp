@@ -5,6 +5,7 @@
 #include "Perf.hpp"
 #include "Toast.hpp"
 
+#include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/desktop/state/FadingOutState.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
@@ -17,6 +18,7 @@
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/protocols/core/Compositor.hpp>
+#include <hyprland/src/render/OpenGL.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/Texture.hpp>
 #include <hyprland/src/render/pass/BorderPassElement.hpp>
@@ -24,7 +26,10 @@
 #include <hyprland/src/render/pass/RectPassElement.hpp>
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 
+#include <wayland-server-core.h>
+
 #include <algorithm>
+#include <array>
 #include <format>
 #include <cmath>
 #include <functional>
@@ -113,8 +118,9 @@ namespace Expanse::Render {
     constexpr double        LABEL_PT     = 11.0;
     constexpr double        LABEL_GAP    = 5.0;
     constexpr double        LABEL_MIN    = 70.0; // narrower on screen, a window shows no label
-    // Making text costs as much as drawing everything else in a frame, so
-    // while the camera moves a label keeps the text it has (cropped to its
+    // A texture made while a frame is on the GPU waits for it to finish (in
+    // the VM, up to tens of ms), so text is made ahead while nothing moves.
+    // While the camera moves a label keeps the text it has (cropped to its
     // window), and only a few missing ones are made each frame.
     constexpr int           LABELS_PER_FRAME = 4;
 
@@ -139,10 +145,12 @@ namespace Expanse::Render {
     // Text is drawn once and kept until it changes.
     struct SText {
         std::string               text;
-        int                       width = 0;
+        int                       width = 0; // what it was made to fit; 0, any
         int                       px    = 0;
+        CHyprColor                color;
         SP<::Render::ITexture>    tex;
         SP<::Render::ITexture>    shadow;
+        bool                      whole = false; // not shortened: it fits anywhere at least as wide
     };
     static std::unordered_map<const Desktop::View::CWindow*, SText> g_labels;
     static SText                                                     g_closeGlyph;
@@ -275,10 +283,12 @@ namespace Expanse::Render {
     }
 
     static bool refresh(SText& cached, const std::string& text, int px, int width, const CHyprColor& color, bool shadow) {
-        if (cached.tex && cached.text == text && cached.px == px && cached.width == width)
+        if (cached.tex && cached.text == text && cached.px == px && cached.width == width && cached.color == color)
             return true;
-        Perf::textRendered();
-        cached = {text, width, px, g_pHyprRenderer->renderText(text, color, px, false, "", width, 500), nullptr};
+        Perf::CTextTime timed;
+        cached = {text, width, px, color, g_pHyprRenderer->renderText(text, color, px, false, "", width, 500), nullptr};
+        // Pango ends a shortened line within a character or two of its width.
+        cached.whole = cached.tex && (width <= 0 || cached.tex->m_size.x < width - 2 * px);
         if (shadow)
             cached.shadow = g_pHyprRenderer->renderText(text, LABEL_SHADOW, px, false, "", width, 500);
         return cached.tex != nullptr;
@@ -299,14 +309,16 @@ namespace Expanse::Render {
         const int PX    = std::round(LABEL_PT * monitor->m_scale);
 
         auto&      cached  = g_labels[window.get()];
-        const bool CURRENT = cached.tex && cached.text == TEXT && cached.px == PX && cached.width == WIDTH;
-        const bool KEEP    = cached.tex && cached.text == TEXT && cached.px == PX && g_canvas.cameraMoving();
+        const auto COLOR   = labelColor(plain);
+        const bool SAME    = cached.tex && cached.text == TEXT && cached.px == PX && cached.color == COLOR;
+        const bool CURRENT = SAME && (cached.whole ? cached.tex->m_size.x <= WIDTH : cached.width == WIDTH);
+        const bool KEEP    = cached.tex && cached.px == PX && g_canvas.cameraMoving();
         if (!CURRENT && !KEEP) {
             if (g_labelsMade >= LABELS_PER_FRAME)
                 g_canvas.wantFrame(); // the rest next frame
             else {
                 ++g_labelsMade;
-                refresh(cached, TEXT, PX, WIDTH, labelColor(plain), !plain);
+                refresh(cached, TEXT, PX, WIDTH, COLOR, !plain);
             }
         }
         if (!cached.tex)
@@ -347,16 +359,32 @@ namespace Expanse::Render {
                 GUIDE);
     }
 
-    // The zoom under the minimap: each value is made once and kept.
-    static std::unordered_map<int, SP<::Render::ITexture>> g_zoomTexts;
+    // The zoom under the minimap, set from digits made once per size: it
+    // changes every frame of a zoom.
+    using SDigits = std::array<SP<::Render::ITexture>, 11>; // 0-9, then %
+    static std::unordered_map<int, SDigits> g_digits;
 
-    static SP<::Render::ITexture> zoomText(int percent, int px) {
-        auto& tex = g_zoomTexts[percent * 1000 + px];
-        if (!tex) {
-            Perf::textRendered();
-            tex = g_pHyprRenderer->renderText(std::format("{}%", percent), CHyprColor{1.F, 1.F, 1.F, 0.7F}, px, false, "", 0, 500);
+    static const SDigits& digits(int px) {
+        auto& set = g_digits[px];
+        if (!set[0])
+            for (size_t i = 0; i < set.size(); ++i) {
+                Perf::CTextTime timed;
+                set[i] = g_pHyprRenderer->renderText(i < 10 ? std::to_string(i) : "%", CHyprColor{1.F, 1.F, 1.F, 0.7F}, px, false, "", 0, 500);
+            }
+        return set;
+    }
+
+    // Bottom left at `at`.
+    static void addZoomText(int percent, int px, const Vector2D& at) {
+        const auto& SET = digits(px);
+        if (std::ranges::any_of(SET, [](const auto& tex) { return !tex; }))
+            return;
+        Vector2D pos = at;
+        for (const char C : std::format("{}%", percent)) {
+            const auto& TEX = SET[C == '%' ? 10 : C - '0'];
+            addTexture(TEX, Vector2D{pos.x, pos.y - TEX->m_size.y}.round());
+            pos.x += TEX->m_size.x;
         }
-        return tex;
     }
 
     // As on the Mac: a dark panel, windows as light blocks, the view outlined,
@@ -374,8 +402,7 @@ namespace Expanse::Render {
         addRect(VIEW, CHyprColor{1.F, 1.F, 1.F, 0.06F}, std::round(2 * S));
         addOutline(monitor, VIEW, CHyprColor{1.F, 1.F, 1.F, 0.9F}, 1, std::round(2 * S));
 
-        if (const auto TEXT = zoomText(sc<int>(std::round(scale * 100)), std::round(10 * S)))
-            addTexture(TEXT, Vector2D{BOX.x + 10 * S, BOX.y + BOX.h - 7 * S - TEXT->m_size.y}.round());
+        addZoomText(sc<int>(std::round(scale * 100)), std::round(10 * S), {BOX.x + 10 * S, BOX.y + BOX.h - 7 * S});
     }
 
     static SText              g_spacesHeading;
@@ -583,6 +610,68 @@ namespace Expanse::Render {
         g_frame.restore.clear();
     }
 
+    // Labels are white with a shadow over the desktop picture, grey without:
+    // turning it on or off makes them all again.
+    static bool plainCanvas() {
+        static bool was   = false;
+        const bool  PLAIN = !g_canvas.wallpaper();
+        if (PLAIN != was) {
+            g_labels.clear();
+            was = PLAIN;
+            prepareLabels();
+        }
+        return PLAIN;
+    }
+
+    // Every window's name, and the zoom's digits, made ahead while nothing
+    // moves, a few at a time, so zooming out never waits on making them.
+    static wl_event_source* g_prepareTimer = nullptr;
+
+    static bool prepareSome() {
+        pruneLabels();
+        const bool PLAIN = plainCanvas();
+        const auto COLOR = labelColor(PLAIN);
+        int        made  = 0;
+        for (const auto& monitor : State::monitorState()->monitors())
+            if (monitor && monitor->m_enabled)
+                digits(std::round(10 * monitor->m_scale));
+        for (const auto& window : Desktop::windowState()->windows()) {
+            const auto MONITOR = window->m_monitor.lock();
+            if (!window->m_isMapped || !MONITOR || !window->m_workspace || window->m_workspace->m_isSpecialWorkspace)
+                continue;
+            const std::string NAME   = appName(window);
+            const int         PX     = std::round(LABEL_PT * MONITOR->m_scale);
+            auto&             cached = g_labels[window.get()];
+            if (NAME.empty() || (cached.text == NAME && cached.px == PX && cached.color == COLOR))
+                continue;
+            if (made++ == LABELS_PER_FRAME)
+                return true;
+            refresh(cached, NAME, PX, 0, COLOR, !PLAIN);
+        }
+        return false;
+    }
+
+    void prepareLabels() {
+        if (!g_pCompositor || !g_pCompositor->m_wlEventLoop)
+            return;
+        if (!g_prepareTimer)
+            g_prepareTimer = wl_event_loop_add_timer(
+                g_pCompositor->m_wlEventLoop,
+                [](void*) {
+                    // Up, the canvas makes what it lacks itself; closing it asks again.
+                    if (g_canvas.live())
+                        return 0;
+                    if (::Render::GL::g_pHyprOpenGL) {
+                        ::Render::GL::g_pHyprOpenGL->makeEGLCurrent();
+                        if (prepareSome())
+                            wl_event_source_timer_update(g_prepareTimer, 16);
+                    }
+                    return 0;
+                },
+                nullptr);
+        wl_event_source_timer_update(g_prepareTimer, 100);
+    }
+
     static void drawCanvas() {
         const auto MONITOR = g_frame.monitor.lock();
         if (g_frame.hidden.empty() || !MONITOR || g_pHyprRenderer->m_renderData.pMonitor != MONITOR)
@@ -609,12 +698,7 @@ namespace Expanse::Render {
 
         // Over the desktop picture, dimmed; or, with it turned off, a plain
         // background (as Expanse's "Desktop Picture Background" menu item).
-        static bool plainLabels = false;
-        const bool  PLAIN       = !g_canvas.wallpaper();
-        if (PLAIN != plainLabels) {
-            g_labels.clear();
-            plainLabels = PLAIN;
-        }
+        const bool PLAIN = plainCanvas();
         // As on the Mac, the desktop picture as it is; or the plain background.
         const float SHOWN = sc<float>(g_canvas.zoomedOut());
         if (SHOWN > 0.F && PLAIN)
@@ -724,7 +808,7 @@ namespace Expanse::Render {
                 g_rendering.reset();
                 static bool wasLive = false;
                 if (wasLive && !g_canvas.live())
-                    pruneLabels();
+                    prepareLabels(); // hovered names back to plain ones, and any missing
                 wasLive = g_canvas.live();
                 break;
             }
@@ -738,13 +822,16 @@ namespace Expanse::Render {
         // shadow, code) that go away with the plugin, so they go first. The
         // pass is rebuilt every frame and nothing is drawing now.
         g_pHyprRenderer->m_renderPass.clear();
+        if (g_prepareTimer)
+            wl_event_source_remove(g_prepareTimer);
+        g_prepareTimer = nullptr;
         updateParking(false, {});
         unhideForeignWindows();
         unhideCanvasWindows();
         restoreGeometry();
         g_labels.clear();
         g_closeGlyph = {};
-        g_zoomTexts.clear();
+        g_digits.clear();
         g_desktopMaps.clear();
         Toast::shutdown();
         g_spacesHeading = {};

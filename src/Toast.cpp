@@ -7,6 +7,7 @@
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/output/Monitor.hpp>
+#include <hyprland/src/render/OpenGL.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/Texture.hpp>
 #include <hyprland/src/render/pass/RectPassElement.hpp>
@@ -55,6 +56,17 @@ namespace Expanse::Toast {
         return {std::round(AREA.x + (AREA.w - SIZE.x) / 2), std::round(AREA.y + AREA.h - ABOVE_BOTTOM - SIZE.y), SIZE.x, SIZE.y};
     }
 
+    // A texture made mid-frame waits for the GPU, so the text is made as the
+    // toast is shown; only a change of scale makes it again while drawing.
+    static bool makeText(const PHLMONITOR& monitor) {
+        if (g_toast.tex && g_toast.texScale == monitor->m_scale)
+            return true;
+        Perf::CTextTime timed;
+        g_toast.tex      = g_pHyprRenderer->renderText(g_toast.text, CHyprColor{1.F, 1.F, 1.F, 1.F}, std::round(FONT_PT * monitor->m_scale), false, "", 0, 500);
+        g_toast.texScale = monitor->m_scale;
+        return g_toast.tex != nullptr;
+    }
+
     static void damageToast() {
         if (!g_toast.lastBox.empty())
             g_pHyprRenderer->damageBox(g_toast.lastBox.copy().expand(2));
@@ -71,6 +83,10 @@ namespace Expanse::Toast {
         g_toast.monitor = MONITOR;
         g_toast.shownAt = Clock::now();
         g_toast.tex.reset();
+        if (::Render::GL::g_pHyprOpenGL) {
+            ::Render::GL::g_pHyprOpenGL->makeEGLCurrent();
+            makeText(MONITOR);
+        }
         damageToast();
         // Frames come by themselves while it fades (fading()); this starts it.
         if (!g_toast.timer)
@@ -103,13 +119,8 @@ namespace Expanse::Toast {
         if (!alive() || monitor != g_toast.monitor.lock())
             return;
         const double S = monitor->m_scale;
-        if (!g_toast.tex || g_toast.texScale != monitor->m_scale) {
-            Perf::textRendered();
-            g_toast.tex      = g_pHyprRenderer->renderText(g_toast.text, CHyprColor{1.F, 1.F, 1.F, 1.F}, std::round(FONT_PT * S), false, "", 0, 500);
-            g_toast.texScale = monitor->m_scale;
-            if (!g_toast.tex)
-                return;
-        }
+        if (!makeText(monitor))
+            return;
         const float ALPHA = std::clamp(1.F - sc<float>((age() - SHOWN_SECONDS) / FADE_SECONDS), 0.F, 1.F);
         const CBox  BOX   = box(monitor);
         if (BOX != g_toast.lastBox) {
