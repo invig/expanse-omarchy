@@ -15,10 +15,13 @@ using namespace Hyprutils::Math;
 // two that only touch don't intersect, and one inset past nothing is null.
 namespace Expanse::Arrange {
 
-    // The standard gap between windows, and how far apart windows can be and
-    // still count as one group.
+    // The standard gap between windows; how far apart windows can be and
+    // still count as one group (Tidy Up tidies each group where it is, and
+    // keeps groups at least this far apart); how close edges come to lining
+    // up for Tidy Up to line them up.
     constexpr double GAP           = 20.0;
     constexpr double CLUSTER_REACH = 240.0;
+    constexpr double ALIGN_REACH   = 60.0;
 
     struct SGuide {
         Vector2D from, to;
@@ -50,18 +53,39 @@ namespace Expanse::Arrange {
     // directly or through a chain of neighbours, share one.
     std::vector<size_t> clusters(const std::vector<CBox>& frames, double reach);
 
-    // Within each cluster, close gaps: each frame slides left (then up) until
-    // it sits `gap` from its nearest neighbour that way that shares its rows
-    // (or columns), so it never creates overlaps.
-    void gravity(std::vector<CBox>& frames, const std::vector<size_t>& clusters, double gap);
+    // Close gaps: each frame slides left (then up) until it sits `gap` from
+    // its nearest neighbour that way that shares its rows (or columns), so it
+    // never creates overlaps.
+    void gravity(std::vector<CBox>& frames, double gap);
+
+    // Line up edges that nearly line up (within `reach`): a frame's top with
+    // its neighbour on the left, then its left edge with its neighbour above.
+    // Skipped where the move would bring it closer than `gap` to another frame
+    // (windows of different widths can't line up both sides).
+    void align(std::vector<CBox>& frames, double reach, double gap);
+
+    // Keep groups `reach` apart, so they stay separate groups: a group that
+    // another has grown into is pushed away as a whole, right or down, in
+    // reading order.
+    void separateGroups(std::vector<CBox>& frames, const std::vector<std::vector<size_t>>& groups, double reach);
+
+    // Tidy Up, on the home layout. Each group of windows is tidied where it
+    // is: overlaps pushed apart, edges that nearly line up lined up, and gaps
+    // closed to the standard gap. A group only moves (as a whole) when another
+    // group has grown into its space.
+    void tidyUp(std::vector<CBox>& frames);
 
     // Origins for windows of `sizes` that keep the `home` layout's gaps: each
     // window keeps its distance to its nearest window on the left (and above),
     // so shrinking windows pull the layout in.
     std::vector<Vector2D> derive(const std::vector<CBox>& home, const std::vector<Vector2D>& sizes);
 
-    // The nearest origin for a window of `size` that overlaps none of
-    // `others`: beside, below, left of or above them, closest to `target`.
-    // Spots inside `visible` win.
-    std::optional<Vector2D> freeSpot(const Vector2D& size, const std::vector<CBox>& others, const Vector2D& target, const CBox& visible, bool onScreenOnly);
+    // An origin for a window of `size` that overlaps none of `others`. First
+    // anywhere along an edge of `anchor`, the window it came from: right,
+    // below, left, then above, lined up with the anchor's top or left edge,
+    // then its bottom or right, then centred. Only when every edge is taken,
+    // beside the windows nearest `target`, the closest first. Spots inside
+    // `visible` win.
+    std::optional<Vector2D> freeSpot(const Vector2D& size, const std::vector<CBox>& others, const std::optional<CBox>& anchor, const Vector2D& target, const CBox& visible,
+                                     bool onScreenOnly);
 }

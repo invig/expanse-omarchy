@@ -3,6 +3,7 @@
 #include <hyprutils/math/Box.hpp>
 
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <set>
 #include <string>
@@ -42,7 +43,23 @@ namespace Expanse::Store {
     };
 
     std::optional<SLayout> load();
-    void                   save(const SLayout& layout);
+    // False when the layout hasn't changed since it was last saved (nothing written).
+    bool                   save(const SLayout& layout);
+
+    // Earlier layouts to go back to (Restore Layout), newest first, next to
+    // the layout in snapshots/, each named for when it was taken. One is taken
+    // when the layout has changed and the newest is SNAPSHOT_SPACING old, so
+    // they're minutes apart, not one per window move; only the newest
+    // SNAPSHOTS_KEPT stay.
+    struct SSnapshot {
+        int64_t               taken = 0; // seconds since 1970
+        std::filesystem::path file;
+    };
+    constexpr size_t       SNAPSHOTS_KEPT   = 3;
+    constexpr int64_t      SNAPSHOT_SPACING = 15 * 60; // seconds
+    std::vector<SSnapshot> snapshots();
+    void                   saveSnapshot(const SLayout& layout);
+    std::optional<SLayout> load(const SSnapshot& snapshot);
 
     // Window titles can be private (document names, mail subjects), so the
     // file stores a hash: enough to recognise the same window next time, not

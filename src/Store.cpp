@@ -1,6 +1,9 @@
 #include "Store.hpp"
 #include "Json.hpp"
 
+#include <algorithm>
+#include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <format>
@@ -23,8 +26,12 @@ namespace Expanse::Store {
         return CBox{*X, *Y, *W, *H};
     }
 
-    std::optional<SLayout> load() {
-        std::ifstream file{path()};
+    static std::filesystem::path snapshotFolder() {
+        return path().parent_path() / "snapshots";
+    }
+
+    static std::optional<SLayout> loadFile(const std::filesystem::path& from) {
+        std::ifstream file{from};
         if (!file)
             return std::nullopt;
         std::stringstream text;
@@ -62,7 +69,15 @@ namespace Expanse::Store {
         return layout;
     }
 
-    void save(const SLayout& layout) {
+    std::optional<SLayout> load() {
+        return loadFile(path());
+    }
+
+    std::optional<SLayout> load(const SSnapshot& snapshot) {
+        return loadFile(snapshot.file);
+    }
+
+    static std::string encode(const SLayout& layout) {
         std::string out = std::format("{{\n  \"version\": 1,\n  \"autoCentre\": {},", layout.autoCentre);
         if (layout.hotCorner)
             out += std::format("\n  \"hotCorner\": {},", Json::quote(*layout.hotCorner));
@@ -87,19 +102,53 @@ namespace Expanse::Store {
             out += std::format(", \"address\": {}, \"pid\": {}}}", W.address, W.pid);
         }
         out += "\n  ]\n}\n";
+        return out;
+    }
 
+    static void write(const std::string& text, const std::filesystem::path& to) {
         // Written aside and renamed into place, so a crash never leaves half a file.
-        const auto      FILE = path();
         std::error_code error;
-        std::filesystem::create_directories(FILE.parent_path(), error);
-        const auto TEMP = FILE.string() + ".next";
+        std::filesystem::create_directories(to.parent_path(), error);
+        const auto TEMP = to.string() + ".next";
         {
             std::ofstream stream{TEMP, std::ios::trunc};
             if (!stream)
                 return;
-            stream << out;
+            stream << text;
         }
-        std::filesystem::rename(TEMP, FILE, error);
+        std::filesystem::rename(TEMP, to, error);
+    }
+
+    bool save(const SLayout& layout) {
+        static std::string last;
+        auto               text = encode(layout);
+        if (text == last)
+            return false;
+        write(text, path());
+        last = std::move(text);
+        return true;
+    }
+
+    std::vector<SSnapshot> snapshots() {
+        std::vector<SSnapshot> out;
+        std::error_code        error;
+        for (const auto& file : std::filesystem::directory_iterator(snapshotFolder(), error)) {
+            const auto STEM = file.path().stem().string();
+            if (file.path().extension() != ".json" || STEM.empty() || !std::ranges::all_of(STEM, [](unsigned char c) { return std::isdigit(c); }))
+                continue;
+            out.push_back({std::stoll(STEM), file.path()});
+        }
+        std::ranges::sort(out, [](const SSnapshot& a, const SSnapshot& b) { return a.taken > b.taken; });
+        return out;
+    }
+
+    void saveSnapshot(const SLayout& layout) {
+        const auto NOW = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        write(encode(layout), snapshotFolder() / std::format("{}.json", NOW));
+        const auto ALL = snapshots();
+        std::error_code error;
+        for (size_t i = SNAPSHOTS_KEPT; i < ALL.size(); ++i)
+            std::filesystem::remove(ALL[i].file, error);
     }
 
     std::string titleKey(const std::string& title) {

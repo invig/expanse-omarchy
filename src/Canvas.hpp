@@ -38,6 +38,7 @@ namespace Expanse {
 
     std::optional<eDirection> parseDirection(const std::string& text);
     std::string               appName(const PHLWINDOW& window); // "org.gnome.Nautilus" → "Nautilus"
+    bool                      sizesItself(const PHLWINDOW& window); // a VM's or remote screen's window: never resized
 
     // The bottom-right overview on the canvas: every window as a block, the
     // view as an outline, the zoom. Screen boxes are global logical.
@@ -89,6 +90,7 @@ namespace Expanse {
         void                   close();        // back where you were, or where you've moved to
         void                   glideTo(PHLWINDOW window, bool fromKeyboard = false);
         void                   hop(eDirection direction);
+        void                   centreCurrent();
         bool                   pickAt(const Vector2D& pos); // a click at a global logical point
         bool                   switchTo(PHLWORKSPACE workspace); // the canvas comes along, zoomed out
 
@@ -101,6 +103,7 @@ namespace Expanse {
 
         // Arranging, on the canvas
         void                   tidy();
+        bool                   restoreLayout(size_t index); // a snapshot, 0 the newest
         void                   selectAll();
         void                   closeWindows(const std::vector<PHLWINDOW>& windows);
         void                   setAutoCentre(bool on);
@@ -244,6 +247,7 @@ namespace Expanse {
         void                   relayoutOn(const PHLMONITOR& monitor);
         Vector2D               cameWith(const PHLWORKSPACE& workspace, const Vector2D& scroll, const Vector2D& moved) const;
         PHLWINDOW              topWindowInView(PHLWINDOW excluding) const;
+        PHLWINDOW              sourceOf(PHLWINDOW window) const;
         void                   settle(const SCamera& camera);
         void                   commit();
         void                   followWorkspace(PHLWORKSPACE workspace);
@@ -337,11 +341,15 @@ namespace Expanse {
         PHLWINDOWREF                m_centreAfterResize;
         void                        centreAfterResize(const PHLWORKSPACE& workspace);
         std::vector<Store::SWindow> m_pool; // saved spots of windows not open now
+        std::optional<Store::SLayout> m_lastLayout;     // as last saved, kept as a snapshot before restoring another
+        std::optional<int64_t>        m_lastSnapshotAt; // when the newest was taken, once read
         bool                        m_paused    = false;
         wl_event_source*            m_saveTimer = nullptr;
 
         std::vector<PHLWINDOWREF> m_selected;
         std::vector<PHLWINDOWREF> m_unplaced; // opened while the canvas couldn't place them
+        std::vector<PHLWINDOWREF> m_fresh;    // opened beside their app's others: new, not back from last time
+        std::unordered_map<std::string, std::chrono::steady_clock::time_point> m_appOpened; // each app's last window, when it opened
 
         // A full-screen window leaves full screen while the canvas is up
         // (Hyprland hides everything under it), and gets it back if you leave

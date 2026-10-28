@@ -27,7 +27,10 @@ namespace Expanse {
 
     constexpr double FIT_MARGIN     = 16.0; // around a window fitted to the screen as you go to it
     constexpr int    RELAYOUT_DELAY = 1000; // ms for a screen change to settle
-    constexpr double ROUNDING       = 2.0;  // px off a chosen size that's an app rounding, not a smaller screen
+    // How far short of the size asked for a window can end up because its app
+    // rounds sizes (a terminal to whole character cells): that's still the
+    // chosen size, not one shrunk for a smaller screen, which takes far more.
+    constexpr double ROUNDING       = 32.0;
 
     static CBox goalBox(const PHLWINDOW& window) {
         return {window->position(IGeometric::GEOMETRIC_GOAL), window->size(IGeometric::GEOMETRIC_GOAL)};
@@ -52,7 +55,7 @@ namespace Expanse {
         // screen is.
         for (const auto& entry : m_originals) {
             const auto WINDOW = entry.window.lock();
-            if (!WINDOW || WINDOW->m_workspace != workspace || fullscreen(WINDOW))
+            if (!WINDOW || WINDOW->m_workspace != workspace || fullscreen(WINDOW) || sizesItself(WINDOW))
                 continue;
             const auto SIZE = goalBox(WINDOW).size();
             if (SIZE.x < entry.preferred.x - ROUNDING || SIZE.y < entry.preferred.y - ROUNDING)
@@ -68,10 +71,18 @@ namespace Expanse {
             if (!WINDOW || fullscreen(WINDOW))
                 continue;
             const auto SIZE = goalBox(WINDOW).size();
-            const bool OURS = entry.lastSized && std::abs(entry.lastSized->x - SIZE.x) < 2 && std::abs(entry.lastSized->y - SIZE.y) < 2;
+            // The size the canvas asked for, as near as its app goes (it gets
+            // there after the ask, rounded).
+            const bool OURS = entry.lastSized && std::abs(entry.lastSized->x - SIZE.x) <= ROUNDING && std::abs(entry.lastSized->y - SIZE.y) <= ROUNDING;
             if (!OURS && (std::abs(SIZE.x - entry.preferred.x) >= 2 || std::abs(SIZE.y - entry.preferred.y) >= 2)) {
                 entry.preferred = SIZE;
                 entry.lastSized.reset();
+            } else if (OURS && std::abs(entry.lastSized->x - entry.preferred.x) < 1 && std::abs(entry.lastSized->y - entry.preferred.y) < 1) {
+                // Asked for the size you chose and the app came as close as it
+                // goes: that's the chosen size from now on, rather than asking
+                // again at every fit.
+                entry.preferred = SIZE;
+                entry.lastSized = SIZE;
             }
         }
     }
@@ -99,17 +110,23 @@ namespace Expanse {
     }
 
     void CCanvas::noteUserMove(const PHLWINDOW& window, const Vector2D& delta) {
-        // On a smaller screen the home layout moves by the same amount, so the
-        // move survives going back to the big screen.
-        if (!isDerived(window->m_workspace))
+        // On the big screen its new spot is its home spot, straight away:
+        // anything that fits the layout from home spots before the next save
+        // (Tidy Up, a window coming back) would otherwise put it back. On a
+        // smaller screen the home layout moves by the same amount, so the move
+        // survives going back to the big screen.
+        if (!isDerived(window->m_workspace)) {
+            if (auto* entry = tracked(window))
+                entry->home = goalBox(window).pos() + scrolledFor(window->m_workspace);
             return;
+        }
         if (auto* entry = tracked(window))
             entry->home = entry->home + delta;
     }
 
     void CCanvas::resizeWindow(const PHLWINDOW& window, const Vector2D& size) {
         const auto TARGET = window->layoutTarget();
-        if (!TARGET || !TARGET->floating())
+        if (!TARGET || !TARGET->floating() || sizesItself(window))
             return;
         noteOriginal(window);
         CBox       layout = TARGET->position();
@@ -125,6 +142,8 @@ namespace Expanse {
     void CCanvas::fitToScreen(const PHLWINDOW& window) {
         // Shrink a window that doesn't fit the screen; grow it back toward the
         // size you chose. It keeps its centre.
+        if (sizesItself(window))
+            return;
         noteOriginal(window);
         noteSizes();
         const auto* ENTRY = tracked(window);
@@ -162,9 +181,7 @@ namespace Expanse {
         }
 
         if (tidy) {
-            Arrange::separate(home, Arrange::GAP);
-            Arrange::gravity(home, Arrange::clusters(home, Arrange::CLUSTER_REACH), Arrange::GAP);
-            Arrange::separate(home, Arrange::GAP);
+            Arrange::tidyUp(home);
             for (size_t i = 0; i < WINDOWS.size(); ++i)
                 tracked(WINDOWS[i])->home = home[i].pos().round();
         }
@@ -176,9 +193,9 @@ namespace Expanse {
             const CBox     NOW   = goalBox(window);
             if (std::abs(SIZE.x - NOW.w) > 1 || std::abs(SIZE.y - NOW.h) > 1)
                 resizeWindow(window, SIZE);
-            // A point or two off the size you chose is the app rounding (a
-            // terminal to its cells): counted as that size, or the windows
-            // beyond it would creep a point every time the screen changes.
+            // A little off the size you chose is the app rounding (a terminal
+            // to its cells): counted as that size, or the windows beyond it
+            // would creep every time the screen changes.
             const Vector2D GOT = goalBox(window).size();
             const bool     ROUNDED = std::abs(GOT.x - ENTRY->preferred.x) <= ROUNDING && std::abs(GOT.y - ENTRY->preferred.y) <= ROUNDING;
             sizes.push_back(ROUNDED ? ENTRY->preferred : GOT);

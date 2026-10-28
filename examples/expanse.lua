@@ -42,6 +42,9 @@ for _, direction in ipairs({ "left", "right", "up", "down" }) do
     hl.plugin.expanse.hop(direction))
 end
 
+-- CTRL + ALT + C puts the window you're in in the middle of the screen.
+bind("CTRL + ALT + C", "Centre the window you're in", hl.plugin.expanse.centre())
+
 -- ALT + SHIFT + ` turns auto-centre on or off: off, clicking a window that's
 -- partly on screen leaves the canvas where it is, for side-by-side work.
 bind("ALT + SHIFT + grave", "Auto-centre on or off", hl.plugin.expanse.auto_centre())

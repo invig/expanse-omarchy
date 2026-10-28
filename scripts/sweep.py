@@ -773,10 +773,10 @@ if parent:
 
 # The Omarchy menu rows.
 rows = json.loads("\n".join(line for line in open(os.path.join(HERE, "..", "examples", "omarchy-menu.jsonc")) if not line.strip().startswith("//")))
-verbs = {"toggle", "tidy", "restore", "autocentre", "wallpaper", "pause", "corner"}
+verbs = {"toggle", "tidy", "centre", "layout", "restore", "autocentre", "wallpaper", "pause", "corner"}
 actions_ok = all(r.get("action", "hyprctl expanse tidy").split()[2] in verbs if r.get("action", "").startswith("hyprctl expanse") else r["action"].startswith("omarchy-launch-")
                  for r in rows.values() if "action" in r)
-checked_ok = all(subprocess.run(SSH + [ENV + r["checked"]], capture_output=True).returncode in (0, 1) for r in rows.values() if "checked" in r)
+checked_ok = all(subprocess.run(SSH + [ENV + r[key]], capture_output=True).returncode in (0, 1) for r in rows.values() for key in ("checked", "when") if key in r)
 check("the Omarchy menu rows parse, and their actions and checks run", actions_ok and checked_ok)
 
 # ===== The README, line by line: what the checks above don't cover.
@@ -1255,6 +1255,123 @@ for i, delay in enumerate((0.1, 0.18, 0.25, 0.3, 0.35, 0.42, 0.5)):
     qmp("key", f"meta_l+{WORKSPACE_KEY}", "sleep", 1500)
     settle()
 check("a workspace bind as a glide ends never bounces back", all(stayed), f"{stayed}")
+
+# ===== As on the Mac 0.1.15-0.1.21.
+qmp("key", "esc")
+settle()
+N = f"sweep-n-{RUN}"
+
+
+def open_titled(app, title, size="560 360"):
+    vm(f'hyprctl dispatch "hl.dsp.exec_cmd(\\"foot --app-id={app} --title={title} sleep infinity\\", {{ float = true, size = \\"{size}\\" }})"')
+    wait(2.4)
+
+
+def titled(title, state=None):
+    return next((box(w) for w in (state or ctl())["windows"] if w["title"] == title), None)
+
+
+def beside(a, b):
+    # Side by side or one above the other, 20 px apart, sharing part of an edge.
+    h = max(b[0] - (a[0] + a[2]), a[0] - (b[0] + b[2]))
+    v = max(b[1] - (a[1] + a[3]), a[1] - (b[1] + b[3]))
+    return (abs(h - 20) <= 1 and v < 0) or (abs(v - 20) <= 1 and h < 0)
+
+
+# A new window opens beside the window it came from: its app's window in
+# view, not whatever is in front.
+focus(A)
+settle()
+open_titled(N, f"n1-{RUN}")
+settle()
+focus(A)
+settle()
+open_titled(N, f"n2-{RUN}")
+settle()
+s = ctl()
+n1, n2 = titled(f"n1-{RUN}", s), titled(f"n2-{RUN}", s)
+check("a second window of an app opens beside the first, not beside the window in front", bool(n1 and n2) and beside(n1, n2), f"{n1} {n2}")
+
+# With others of its app open, a new window is new (a second terminal): it
+# goes beside its source, not to the spot of one just closed.
+vm(f'hyprctl dispatch "hl.dsp.window.move({{ x = 0, y = 600, relative = true, window = \\"title:n2-{RUN}\\" }})"')
+wait(1.5)
+closed = titled(f"n2-{RUN}")
+for c in clients():
+    if c["title"] == f"n2-{RUN}":
+        vm(f"kill {c['pid']}")
+wait(1.5)
+open_titled(N, f"n3-{RUN}")
+settle()
+s = ctl()
+n1, n3 = titled(f"n1-{RUN}", s), titled(f"n3-{RUN}", s)
+check("with others of its app open, a new window goes beside them, not where one was closed", bool(n1 and n3) and beside(n1, n3) and n3 != closed,
+      f"{n1} {n3}, the closed one was at {closed}")
+
+# Ctrl + Alt + C centres the window you're in.
+focus(A)
+settle()
+move_by(A, 260, 140)
+qmp("key", "ctrl+alt+c")
+settle()
+check("Ctrl + Alt + C centres the window you're in", centred(real()[A]), f"{real()[A]}, the middle is {screen_middle()}")
+
+# On a workspace of their own: Tidy Up, Restore Layout, and a new tab in a group.
+vm(f'hyprctl dispatch "hl.dsp.focus({{ monitor = \\"{MON}\\" }})"')
+qmp("key", "meta_l+9")
+wait(1)
+P, Q, R = (f"sweep-{name}-{RUN}" for name in ("p", "q", "r"))
+open_app(P, "600 380")
+open_app(Q, "500 340")
+settle()
+# Q opened beside P, lined up; now 50 px further off and 30 px lower.
+move_by(Q, 50, 30)
+before = canvas_of(P)
+ctl("tidy")
+wait(2.5)
+p, q = canvas_of(P), canvas_of(Q)
+check("Tidy Up lines up each group where it is: its windows aligned and 20 px apart, the group left in place",
+      bool(p and q) and p == before and q[1] == p[1] and abs(q[0] - (p[0] + p[2] + 20)) <= 1, f"{before} -> {p}, {q}")
+qmp("key", "esc")
+settle()
+
+# Restore Layout: back to a snapshot (this one copied from the saved layout),
+# and undone, since the layout it replaces becomes the newest snapshot.
+wait(1.5)
+vm("mkdir -p ~/.local/state/expanse/snapshots && cp ~/.local/state/expanse/layout.json ~/.local/state/expanse/snapshots/$(date +%s).json")
+copied = int(vm("ls ~/.local/state/expanse/snapshots | sort -n | tail -1").strip().split(".")[0])
+kept = canvas_of(Q)
+wait(1.2)
+move_by(Q, 300, 200)
+wait(2)
+moved = canvas_of(Q)
+snapshots = json.loads(vm("hyprctl expanse layout") or "[]")
+index = next((x["snapshot"] for x in snapshots if x["taken"] == copied), None)
+vm(f"hyprctl expanse layout {index}")
+wait(2)
+check("Restore Layout puts windows back where a snapshot had them", index is not None and canvas_of(Q) == kept, f"{kept} -> {moved} -> {canvas_of(Q)} ({snapshots})")
+vm("hyprctl expanse layout 0")
+wait(2)
+check("and is undone by restoring the newest snapshot, the layout it replaced", canvas_of(Q) == moved, f"{moved} vs {canvas_of(Q)}")
+qmp("key", "esc")
+settle()
+
+# A new tab in a group (Hyprland's tabbed windows) keeps the group where it is.
+focus(P)
+wait(0.5)
+vm('hyprctl dispatch "hl.dsp.group.toggle()"')
+wait(1)
+spot = client(P)["at"]
+open_app(R, "600 380")
+settle()
+check("a new tab in a group keeps the group where it is", client(P)["at"] == spot and client(R)["at"] == spot, f"{spot}: {client(P)['at']}, {client(R)['at']}")
+for c in clients():
+    if c["class"] in (P, Q, R, N):
+        vm(f"kill {c['pid']}")
+wait(1)
+qmp("key", f"meta_l+{WORKSPACE_KEY}")
+wait(1)
+settle()
 
 # ===== Unloading in the middle of things.
 UNLOAD = "hyprctl plugin unload ~/expanse-hypr/expanse.so >/dev/null; hyprctl plugin load ~/expanse-hypr/expanse.so >/dev/null"

@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <ranges>
+#include <ctime>
 #include <set>
 
 // Remembering the canvas, and switching in and out cleanly, as on the Mac.
@@ -187,7 +188,19 @@ namespace Expanse {
         for (size_t i = 0; i < std::min(m_pool.size(), SAVED_CLOSED); ++i)
             layout.windows.push_back(m_pool[i]);
 
-        Store::save(layout);
+        // A snapshot to go back to (Restore Layout), when the layout has
+        // changed and the newest is old enough.
+        if (!Store::save(layout))
+            return;
+        if (!m_lastSnapshotAt) {
+            const auto ALL   = Store::snapshots();
+            m_lastSnapshotAt = ALL.empty() ? 0 : ALL.front().taken;
+        }
+        if (const int64_t NOW = std::time(nullptr); NOW - *m_lastSnapshotAt >= Store::SNAPSHOT_SPACING) {
+            Store::saveSnapshot(layout);
+            m_lastSnapshotAt = NOW;
+        }
+        m_lastLayout = std::move(layout);
     }
 
     bool CCanvas::placeFromSaved(PHLWINDOW window, bool exactOnly) {
@@ -236,8 +249,10 @@ namespace Expanse {
         const CBox NOW    = goalBox(window);
         layout.x          = std::round(FRAME.x + (layout.x - NOW.x));
         layout.y          = std::round(FRAME.y + (layout.y - NOW.y));
-        layout.w += FRAME.w - NOW.w;
-        layout.h += FRAME.h - NOW.h;
+        if (!sizesItself(window)) {
+            layout.w += FRAME.w - NOW.w;
+            layout.h += FRAME.h - NOW.h;
+        }
         g_layoutManager->setTargetGeom(layout, TARGET);
         TARGET->warpPositionSize();
         damage();

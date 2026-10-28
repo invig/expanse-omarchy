@@ -10,6 +10,7 @@
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
+#include <hyprland/src/desktop/view/Group.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/layout/target/Target.hpp>
@@ -22,6 +23,8 @@
 #include <wayland-server-core.h>
 
 #include <algorithm>
+#include <ctime>
+#include <set>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
@@ -39,6 +42,7 @@ namespace Expanse {
     constexpr double HOP_SECONDS        = 0.30; // at 100%
     constexpr double PAN_SECONDS        = 0.25; // on the canvas, following the highlight
     constexpr int    BACK_FROM_FULLSCREEN_MS = 400; // for Hyprland to put a window back in its box
+    constexpr auto   BURST              = std::chrono::seconds(3); // an app's windows opening together (a session coming back)
     constexpr double FIT_INSET          = 80.0; // canvas px around everything, when fitting
     constexpr double MIN_SCALE          = 0.03;
     constexpr double MAX_SCALE          = 1.5;
@@ -140,6 +144,21 @@ namespace Expanse {
         if (!name.empty())
             name[0] = std::toupper(sc<unsigned char>(name[0]));
         return name.empty() ? window->m_title : name;
+    }
+
+    bool sizesItself(const PHLWINDOW& window) {
+        // Apps whose window follows a display somewhere else (a VM, a remote
+        // desktop): they size it to match, and resizing it makes them change
+        // that display's resolution. Their size is left alone, and whatever
+        // size they choose is theirs.
+        static const std::set<std::string> APPS = {
+            "virt-manager", "remote-viewer", "virt-viewer", "org.gnome.boxes", "virtualbox machine", "virtualboxvm", "vmware", "vmplayer", "org.remmina.remmina",
+            "org.gnome.connections", "com.moonlight_stream.moonlight", "xfreerdp", "wlfreerdp", "sdl-freerdp", "vncviewer", "org.kde.krdc", "rustdesk", "anydesk",
+            "looking-glass-client",
+        };
+        std::string app = window->m_initialClass;
+        std::ranges::transform(app, app.begin(), [](unsigned char c) { return std::tolower(c); });
+        return APPS.contains(app) || app.starts_with("qemu");
     }
 
     std::optional<eDirection> parseDirection(const std::string& text) {
@@ -268,6 +287,15 @@ namespace Expanse {
             if (const auto WINDOW = ref.lock(); WINDOW && !live() && m_autoCentre && offItsScreen(WINDOW))
                 glideTo(WINDOW, fromKeyboard);
         });
+    }
+
+    void CCanvas::centreCurrent() {
+        // The window you're in, to the middle of the screen, with a hop's
+        // glide. Zoomed out, back to 100% on it.
+        if (m_paused)
+            return;
+        if (const auto WINDOW = Desktop::focusState()->window(); WINDOW && isCanvasWindow(WINDOW))
+            glideTo(WINDOW, true);
     }
 
     void CCanvas::hop(eDirection direction) {
@@ -718,12 +746,36 @@ namespace Expanse {
         return nullptr;
     }
 
+    PHLWINDOW CCanvas::sourceOf(PHLWINDOW window) const {
+        // The window a new one came from: its app's front window in view,
+        // else the window in front.
+        const CBox VIEW = live() ? viewInCanvas() : usableArea();
+        for (const auto& other : canvasWindows() | std::views::reverse)
+            if (other != window && other->m_initialClass == window->m_initialClass && !canvasBox(other).intersection(VIEW).empty())
+                return other;
+        return topWindowInView(window);
+    }
+
     void CCanvas::onWindowOpen(PHLWINDOW window) {
-        // A new standard window opens in free space beside what you were
-        // working on (the top window in view), instead of on top of it.
-        // Dialogs keep the spot their app gives them.
+        // A new standard window opens in free space beside the window it came
+        // from, instead of on top of it. Dialogs keep the spot their app gives
+        // them.
         if (m_paused || !window || window->parent() || window->isModal() || window->isX11OverrideRedirect() || !window->m_workspace)
             return;
+
+        // An app's first window, or one opening in a burst with it (a browser
+        // bringing its session back), may be one back from last time, with a
+        // saved spot. Apps here seldom bring windows back, so one opened later,
+        // with others of its app open, is new: a second terminal goes beside
+        // the first, not to where some old terminal was.
+        const auto NOW   = std::chrono::steady_clock::now();
+        const bool ALONE = std::ranges::none_of(Desktop::windowState()->windows(), [&](const PHLWINDOW& other) {
+            return other != window && other->m_isMapped && other->m_initialClass == window->m_initialClass;
+        });
+        auto&      last  = m_appOpened[window->m_initialClass];
+        if (!ALONE && NOW - last > BURST)
+            m_fresh.emplace_back(window);
+        last = NOW;
 
         // On its own workspace, showing or not (a rule or an app can open it
         // on another). With the canvas up on another workspace there's no
@@ -731,7 +783,7 @@ namespace Expanse {
         PHLWINDOW ANCHOR;
         if (!live() || window->m_workspace == m_workspace.lock()) {
             SLookAt here{*this, window->m_workspace};
-            ANCHOR = topWindowInView(window);
+            ANCHOR = sourceOf(window);
         }
         // Out of the event: Hyprland is still mapping the window.
         later([this, ref = PHLWINDOWREF{window}, anchor = PHLWINDOWREF{ANCHOR}] {
@@ -756,10 +808,20 @@ namespace Expanse {
 
         SLookAt    here{*this, window->m_workspace};
         const bool SHOWING = window->m_workspace->isVisible();
+        const bool FRESH   = std::ranges::any_of(m_fresh, [&](const PHLWINDOWREF& ref) { return ref.lock() == window; });
+        std::erase_if(m_fresh, [&](const PHLWINDOWREF& ref) { return !ref.lock() || ref.lock() == window; });
+        // One that waited (opened mid-glide) goes beside its source as it is now.
+        if (!anchor)
+            anchor = sourceOf(window);
+
+        // A new tab in a group (Hyprland's tabbed windows) already has the
+        // group's spot: placed as a new window it would move the whole group.
+        if (window->m_group && window->m_group->size() > 1)
+            return;
 
         // A window that had a spot last time (an app opened again, or after a
         // restart, on any workspace) goes back to it.
-        if (placeFromSaved(window, false)) {
+        if (placeFromSaved(window, FRESH)) {
             scheduleSave();
             if (SHOWING && isCanvasWindow(window) && !live() && !fullyVisible(window))
                 glideTo(window);
@@ -781,9 +843,10 @@ namespace Expanse {
                 others.push_back(canvasBox(other));
 
         const CBox     BOX     = canvasBox(window);
-        const Vector2D NEAR    = anchor && isCanvasWindow(anchor) ? canvasBox(anchor).middle() : viewCentre().pos();
+        const auto     SOURCE  = anchor && anchor != window && isCanvasWindow(anchor) ? std::optional<CBox>{canvasBox(anchor)} : std::nullopt;
+        const Vector2D NEAR    = SOURCE ? SOURCE->middle() : viewCentre().pos();
         const CBox     VISIBLE = live() ? viewInCanvas() : usableArea();
-        const auto     SPOT    = Arrange::freeSpot(BOX.size(), others, NEAR, VISIBLE, !m_autoCentre);
+        const auto     SPOT    = Arrange::freeSpot(BOX.size(), others, SOURCE, NEAR, VISIBLE, !m_autoCentre);
         if (!SPOT)
             return; // the first window, or nowhere free: where Hyprland put it
 
@@ -841,6 +904,63 @@ namespace Expanse {
         cameraMovedByUser();
         animateTo(fitCamera(1.0), STATE_OVERVIEW, CAMERA_SECONDS);
         scheduleSave();
+    }
+
+    bool CCanvas::restoreLayout(size_t index) {
+        // Every window on this canvas back where a snapshot had it, fitted to
+        // this screen (it may have been taken on another); windows it doesn't
+        // know stay where they are. The layout it replaces becomes a snapshot
+        // itself, so this can be undone. Shown zoomed out, as Tidy Up.
+        if (m_paused || m_state == STATE_GLIDING)
+            return false;
+        const auto ALL    = Store::snapshots();
+        const auto LAYOUT = index < ALL.size() ? Store::load(ALL[index]) : std::nullopt;
+        if (!LAYOUT)
+            return false;
+        if (!live()) {
+            openAt100();
+            if (!live())
+                return false;
+        }
+        const auto WORKSPACE = workspace();
+        const auto WINDOWS   = canvasWindows();
+        if (!WORKSPACE || WINDOWS.empty())
+            return false;
+
+        saveNow();
+        if (m_lastLayout) {
+            Store::saveSnapshot(*m_lastLayout);
+            m_lastSnapshotAt = std::time(nullptr);
+        }
+
+        // This workspace's windows, from this workspace's in the snapshot.
+        std::vector<Store::SWindow> pool;
+        for (const auto& entry : LAYOUT->windows)
+            if (entry.workspace == WORKSPACE->m_name)
+                pool.push_back(entry);
+        std::set<uint64_t> open;
+        for (const auto& window : Desktop::windowState()->windows())
+            open.insert(reinterpret_cast<uint64_t>(window.get()));
+
+        noteSizes();
+        for (const auto& window : WINDOWS) {
+            noteOriginal(window);
+            const auto MATCH = Store::takeMatch(window->m_initialClass, window->m_initialTitle, reinterpret_cast<uint64_t>(window.get()), window->getPID(), open, pool);
+            auto*      entry = tracked(window);
+            if (!MATCH || !entry)
+                continue;
+            // Its home spot and chosen size; fitting works out where it goes on this screen.
+            entry->home         = MATCH->home.value_or(MATCH->frame.pos());
+            const Vector2D SIZE = MATCH->preferred.value_or(MATCH->frame.size());
+            if (SIZE.x > 0 && SIZE.y > 0 && !sizesItself(window))
+                entry->preferred = SIZE;
+        }
+        fitLayoutToScreen(0, false);
+
+        cameraMovedByUser();
+        animateTo(fitCamera(1.0), STATE_OVERVIEW, CAMERA_SECONDS);
+        scheduleSave();
+        return true;
     }
 
     void CCanvas::selectAll() {

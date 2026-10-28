@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <numeric>
 
 namespace Expanse::Arrange {
@@ -222,7 +223,7 @@ namespace Expanse::Arrange {
         return out;
     }
 
-    void gravity(std::vector<CBox>& frames, const std::vector<size_t>& clusters, double gap) {
+    void gravity(std::vector<CBox>& frames, double gap) {
         const auto OVERLAPY = [](const CBox& a, const CBox& b) { return std::min(maxY(a), maxY(b)) - std::max(minY(a), minY(b)) > 0; };
         const auto OVERLAPX = [](const CBox& a, const CBox& b) { return std::min(maxX(a), maxX(b)) - std::max(minX(a), minX(b)) > 0; };
 
@@ -234,7 +235,7 @@ namespace Expanse::Arrange {
                 const CBox            R = frames[I];
                 std::optional<double> nearest;
                 for (size_t j = 0; j < frames.size(); ++j)
-                    if (j != I && clusters[j] == clusters[I] && maxX(frames[j]) <= minX(R) + 0.5 && OVERLAPY(frames[j], R))
+                    if (j != I && maxX(frames[j]) <= minX(R) + 0.5 && OVERLAPY(frames[j], R))
                         nearest = std::max(nearest.value_or(-std::numeric_limits<double>::infinity()), maxX(frames[j]));
                 if (nearest && minX(R) - *nearest > gap)
                     frames[I].x = *nearest + gap;
@@ -246,12 +247,132 @@ namespace Expanse::Arrange {
                 const CBox            R = frames[I];
                 std::optional<double> nearest;
                 for (size_t j = 0; j < frames.size(); ++j)
-                    if (j != I && clusters[j] == clusters[I] && maxY(frames[j]) <= minY(R) + 0.5 && OVERLAPX(frames[j], R))
+                    if (j != I && maxY(frames[j]) <= minY(R) + 0.5 && OVERLAPX(frames[j], R))
                         nearest = std::max(nearest.value_or(-std::numeric_limits<double>::infinity()), maxY(frames[j]));
                 if (nearest && minY(R) - *nearest > gap)
                     frames[I].y = *nearest + gap;
             }
         }
+    }
+
+    void align(std::vector<CBox>& frames, double reach, double gap) {
+        const auto OVERLAPY = [](const CBox& a, const CBox& b) { return std::min(maxY(a), maxY(b)) - std::max(minY(a), minY(b)) > 0; };
+        const auto OVERLAPX = [](const CBox& a, const CBox& b) { return std::min(maxX(a), maxX(b)) - std::max(minX(a), minX(b)) > 0; };
+        const auto CLEAR    = [&](const CBox& r, size_t except) {
+            for (size_t j = 0; j < frames.size(); ++j)
+                if (j != except && intersects(inset(frames[j], -gap + 0.5, -gap + 0.5), r))
+                    return false;
+            return true;
+        };
+
+        std::vector<size_t> order(frames.size());
+        std::iota(order.begin(), order.end(), 0);
+        std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return minX(frames[a]) < minX(frames[b]); });
+        for (const size_t I : order) {
+            const CBox            R = frames[I];
+            std::optional<size_t> beside; // the first of those reaching furthest right
+            for (size_t j = 0; j < frames.size(); ++j)
+                if (j != I && maxX(frames[j]) <= minX(R) + 0.5 && OVERLAPY(frames[j], R) && std::abs(minY(frames[j]) - minY(R)) <= reach &&
+                    (!beside || maxX(frames[j]) > maxX(frames[*beside])))
+                    beside = j;
+            if (!beside || minY(frames[*beside]) == minY(R))
+                continue;
+            const CBox LINED{R.x, minY(frames[*beside]), R.w, R.h};
+            if (CLEAR(LINED, I))
+                frames[I] = LINED;
+        }
+
+        std::iota(order.begin(), order.end(), 0);
+        std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return minY(frames[a]) < minY(frames[b]); });
+        for (const size_t I : order) {
+            const CBox            R = frames[I];
+            std::optional<size_t> above;
+            for (size_t j = 0; j < frames.size(); ++j)
+                if (j != I && maxY(frames[j]) <= minY(R) + 0.5 && OVERLAPX(frames[j], R) && std::abs(minX(frames[j]) - minX(R)) <= reach &&
+                    (!above || maxY(frames[j]) > maxY(frames[*above])))
+                    above = j;
+            if (!above || minX(frames[*above]) == minX(R))
+                continue;
+            const CBox LINED{minX(frames[*above]), R.y, R.w, R.h};
+            if (CLEAR(LINED, I))
+                frames[I] = LINED;
+        }
+    }
+
+    void separateGroups(std::vector<CBox>& frames, const std::vector<std::vector<size_t>>& groups, double reach) {
+        const auto BOUNDS = [&](const std::vector<size_t>& group) {
+            double x0 = minX(frames[group[0]]), y0 = minY(frames[group[0]]), x1 = maxX(frames[group[0]]), y1 = maxY(frames[group[0]]);
+            for (const size_t I : group) {
+                x0 = std::min(x0, minX(frames[I]));
+                y0 = std::min(y0, minY(frames[I]));
+                x1 = std::max(x1, maxX(frames[I]));
+                y1 = std::max(y1, maxY(frames[I]));
+            }
+            return CBox{x0, y0, x1 - x0, y1 - y0};
+        };
+        std::vector<const std::vector<size_t>*> order;
+        for (const auto& group : groups)
+            if (!group.empty())
+                order.push_back(&group);
+        std::vector<CBox> bounds;
+        for (const auto* group : order)
+            bounds.push_back(BOUNDS(*group));
+        std::vector<size_t> sorted(order.size());
+        std::iota(sorted.begin(), sorted.end(), 0);
+        std::stable_sort(sorted.begin(), sorted.end(), [&](size_t a, size_t b) {
+            return std::pair{minY(bounds[a]), minX(bounds[a])} < std::pair{minY(bounds[b]), minX(bounds[b])};
+        });
+
+        std::vector<CBox> settled;
+        for (const size_t K : sorted) {
+            const auto& group = *order[K];
+            for (int n = 0; n < 200; ++n) {
+                std::optional<Vector2D> push;
+                for (const size_t I : group) {
+                    const CBox& R   = frames[I];
+                    const auto  HIT = std::ranges::find_if(settled, [&](const CBox& s) { return intersects(inset(s, -reach + 0.5, -reach + 0.5), R); });
+                    if (HIT == settled.end())
+                        continue;
+                    const double RIGHT = maxX(*HIT) + reach - minX(R), DOWN = maxY(*HIT) + reach - minY(R);
+                    push               = RIGHT <= DOWN ? Vector2D{RIGHT, 0.0} : Vector2D{0.0, DOWN};
+                    break;
+                }
+                if (!push)
+                    break;
+                for (const size_t I : group) {
+                    frames[I].x += push->x;
+                    frames[I].y += push->y;
+                }
+            }
+            for (const size_t I : group)
+                settled.push_back(frames[I]);
+        }
+    }
+
+    void tidyUp(std::vector<CBox>& frames) {
+        const auto                                CLUSTER = clusters(frames, CLUSTER_REACH);
+        std::map<size_t, std::vector<size_t>>     byCluster;
+        for (size_t i = 0; i < frames.size(); ++i)
+            byCluster[CLUSTER[i]].push_back(i);
+        std::vector<std::vector<size_t>> groups;
+        for (auto& [_, group] : byCluster)
+            groups.push_back(std::move(group));
+
+        for (const auto& group : groups) {
+            std::vector<CBox> f;
+            for (const size_t I : group)
+                f.push_back(frames[I]);
+            separate(f, GAP);
+            // Twice: closing a gap can undo a line-up, and lining up can open a gap.
+            for (int pass = 0; pass < 2; ++pass) {
+                gravity(f, GAP);
+                align(f, ALIGN_REACH, GAP);
+            }
+            separate(f, GAP);
+            for (size_t k = 0; k < group.size(); ++k)
+                frames[group[k]] = f[k];
+        }
+        separateGroups(frames, groups, CLUSTER_REACH);
     }
 
     std::vector<Vector2D> derive(const std::vector<CBox>& home, const std::vector<Vector2D>& sizes) {
@@ -308,34 +429,55 @@ namespace Expanse::Arrange {
         return out;
     }
 
-    std::optional<Vector2D> freeSpot(const Vector2D& size, const std::vector<CBox>& others, const Vector2D& target, const CBox& visible, bool onScreenOnly) {
+    std::optional<Vector2D> freeSpot(const Vector2D& size, const std::vector<CBox>& others, const std::optional<CBox>& anchor, const Vector2D& target, const CBox& visible,
+                                     bool onScreenOnly) {
         if (others.empty())
             return std::nullopt;
 
-        // Neighbours of the windows nearest the target; nudged by direction so ties go right, then down.
+        struct SCandidate {
+            Vector2D origin;
+            double   bias;
+            bool     byDistance; // ranked by distance to the target too
+        };
+        std::vector<SCandidate> candidates;
+        if (anchor) {
+            const CBox&  A     = *anchor;
+            const double YS[3] = {minY(A), maxY(A) - size.y, minY(A) + A.h / 2 - size.y / 2};
+            const double XS[3] = {minX(A), maxX(A) - size.x, minX(A) + A.w / 2 - size.x / 2};
+            for (int i = 0; i < 3; ++i)
+                candidates.push_back({{maxX(A) + GAP, YS[i]}, i * 10.0, false});
+            for (int i = 0; i < 3; ++i)
+                candidates.push_back({{XS[i], maxY(A) + GAP}, 40 + i * 10.0, false});
+            for (int i = 0; i < 3; ++i)
+                candidates.push_back({{minX(A) - GAP - size.x, YS[i]}, 80 + i * 10.0, false});
+            for (int i = 0; i < 3; ++i)
+                candidates.push_back({{XS[i], minY(A) - GAP - size.y}, 120 + i * 10.0, false});
+        }
+
+        // Further out: beside the windows nearest the target, after every
+        // spot touching the anchor; nudged by direction so ties go right, then down.
+        const double        AWAY = anchor ? 5000 : 0;
         std::vector<size_t> nearest(others.size());
         std::iota(nearest.begin(), nearest.end(), 0);
         std::stable_sort(nearest.begin(), nearest.end(), [&](size_t a, size_t b) { return centre(others[a]).distance(target) < centre(others[b]).distance(target); });
         nearest.resize(std::min<size_t>(nearest.size(), 12));
-
-        std::vector<std::pair<Vector2D, double>> candidates;
         for (const size_t I : nearest) {
             const CBox& O = others[I];
-            candidates.push_back({{maxX(O) + GAP, minY(O)}, 0});
-            candidates.push_back({{minX(O), maxY(O) + GAP}, 40});
-            candidates.push_back({{minX(O) - GAP - size.x, minY(O)}, 80});
-            candidates.push_back({{minX(O), minY(O) - GAP - size.y}, 120});
+            candidates.push_back({{maxX(O) + GAP, minY(O)}, AWAY, true});
+            candidates.push_back({{minX(O), maxY(O) + GAP}, AWAY + 40, true});
+            candidates.push_back({{minX(O) - GAP - size.x, minY(O)}, AWAY + 80, true});
+            candidates.push_back({{minX(O), minY(O) - GAP - size.y}, AWAY + 120, true});
         }
 
         std::optional<std::pair<Vector2D, double>> best;
-        for (const auto& [origin, bias] : candidates) {
+        for (const auto& [origin, bias, byDistance] : candidates) {
             const CBox R{origin.x, origin.y, size.x, size.y};
             if (std::ranges::any_of(others, [&](const CBox& o) { return intersects(inset(o, -GAP / 2.0, -GAP / 2.0), R); }))
                 continue;
             const bool SHOWN = contains(visible, R);
             if (onScreenOnly && !SHOWN)
                 continue;
-            const double SCORE = centre(R).distance(target) + bias + (SHOWN ? 0 : 1500);
+            const double SCORE = (byDistance ? centre(R).distance(target) : 0) + bias + (SHOWN ? 0 : 1500);
             if (!best || SCORE < best->second)
                 best = {origin, SCORE};
         }

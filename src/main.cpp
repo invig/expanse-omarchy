@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <charconv>
+#include <ctime>
 #include <format>
 #include <sstream>
 #include <string>
@@ -50,6 +52,25 @@ static int luaOverview(lua_State* L) {
 static int luaTidy(lua_State* L) {
     return luaPush(L, [](lua_State*) {
         g_canvas.tidy();
+        return 0;
+    });
+}
+
+static int luaRestoreLayout(lua_State* L) {
+    lua_pushinteger(L, luaL_optinteger(L, 1, 0));
+    lua_pushcclosure(
+        L,
+        [](lua_State* L) {
+            g_canvas.restoreLayout(sc<size_t>(std::max<lua_Integer>(0, lua_tointeger(L, lua_upvalueindex(1)))));
+            return 0;
+        },
+        1);
+    return 1;
+}
+
+static int luaCentre(lua_State* L) {
+    return luaPush(L, [](lua_State*) {
+        g_canvas.centreCurrent();
         return 0;
     });
 }
@@ -104,6 +125,7 @@ static constexpr const char* USAGE =
 static constexpr const char* KEYS = R"(Expanse
   Alt + `                  zoom out to every window, and back
   Super + arrows           glide to the nearest window that way
+  Ctrl + Alt + C           centre the window you're in
   rest in a bottom corner  zoom out (hyprctl expanse corner ...)
 
 Zoomed out
@@ -119,6 +141,25 @@ Zoomed out
   minimap, workspaces bar  click to go there
   Esc, right-click         clear the selection, then back to 100%
 )";
+
+// The layout snapshots, newest first, as JSON: when each was taken.
+static std::string snapshotList() {
+    const int64_t NOW = std::time(nullptr);
+    std::string   out = "[";
+    const auto    ALL = Store::snapshots();
+    for (size_t i = 0; i < ALL.size(); ++i) {
+        const int64_t AGE = NOW - ALL[i].taken;
+        const auto    AGO = AGE < 60 ? std::string{"just now"} :
+               AGE < 3600         ? std::format("{} minute{} ago", AGE / 60, AGE / 60 == 1 ? "" : "s") :
+               AGE < 86400        ? std::format("{} hour{} ago", AGE / 3600, AGE / 3600 == 1 ? "" : "s") :
+                                    std::format("{} day{} ago", AGE / 86400, AGE / 86400 == 1 ? "" : "s");
+        const time_t TAKEN = ALL[i].taken;
+        char         at[32] = {};
+        std::strftime(at, sizeof(at), "%H:%M", std::localtime(&TAKEN));
+        out += std::format("{}{{\"snapshot\": {}, \"taken\": {}, \"ago\": \"{}\", \"at\": \"{}\"}}", i ? ", " : "", i, ALL[i].taken, AGO, at);
+    }
+    return out + "]\n";
+}
 
 static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
     std::istringstream words{request};
@@ -149,6 +190,19 @@ static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
         g_canvas.close();
     else if (verb == "tidy")
         g_canvas.tidy();
+    else if (verb == "centre" || verb == "center")
+        g_canvas.centreCurrent();
+    else if (verb == "layout") {
+        // Restore Layout: no number lists the snapshots; 0 is the newest.
+        std::string word;
+        words >> word;
+        if (word.empty() || word == "list")
+            return snapshotList();
+        size_t index = 0;
+        if (std::from_chars(word.data(), word.data() + word.size(), index).ec != std::errc{})
+            return "layout: expected a snapshot number (hyprctl expanse layout lists them)\n";
+        return g_canvas.restoreLayout(index) ? "ok\n" : "layout: no such snapshot, or the canvas is paused or busy\n";
+    }
     else if (verb == "restore")
         g_canvas.restoreOffscreen();
     else if (verb == "pause") {
@@ -372,6 +426,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "overview", luaOverview);
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "hop", luaHop);
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "tidy", luaTidy);
+    HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "centre", luaCentre);
+    HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "restore_layout", luaRestoreLayout);
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "auto_centre", luaAutoCentre);
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "pause", luaPause);
     HyprlandAPI::addLuaFunction(PHANDLE, "expanse", "restore", luaRestore);
