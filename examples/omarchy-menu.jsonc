@@ -13,6 +13,7 @@
   "expanse.restore": {"icon": "", "label": "Restore All", "description": "Every window back into view", "action": "hyprctl expanse restore"},
   "expanse.centre": {"icon": "", "label": "Auto-Centre", "description": "Centre a window you go to from the keyboard", "action": "hyprctl expanse autocentre toggle", "checked": "hyprctl expanse | jq -e .autoCentre"},
   "expanse.picture": {"icon": "", "label": "Background", "description": "The desktop picture behind the canvas", "action": "hyprctl expanse wallpaper toggle", "checked": "hyprctl expanse | jq -e .wallpaper"},
+  "expanse.names": {"icon": "", "label": "Window Names", "description": "App names above the windows", "action": "hyprctl expanse names toggle", "checked": "hyprctl expanse | jq -e .names"},
   "expanse.pause": {"icon": "", "label": "Pause", "description": "Windows back where they were before the canvas", "action": "hyprctl expanse pause toggle", "checked": "hyprctl expanse | jq -e .paused"},
   "expanse.corner": {"icon": "", "label": "Hot Corner"},
   "expanse.corner.bottom": {"label": "Bottom", "action": "hyprctl expanse corner bottom", "checked": "hyprctl expanse corner | jq -e '.corner == \"bottom\"'"},

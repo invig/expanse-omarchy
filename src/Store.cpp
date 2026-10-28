@@ -44,10 +44,16 @@ namespace Expanse::Store {
         layout.autoCentre = ROOT->boolean("autoCentre").value_or(true);
         layout.hotCorner  = ROOT->string("hotCorner");
         layout.wallpaper  = ROOT->boolean("wallpaper");
+        layout.names      = ROOT->boolean("names");
+        layout.logging    = ROOT->boolean("logging").value_or(false);
         if (const auto* SCROLLED = ROOT->array("scrolled"))
             for (const auto& entry : *SCROLLED)
                 if (const auto WS = entry.string("workspace"); WS && entry.number("x") && entry.number("y"))
                     layout.scrolled.emplace_back(*WS, Vector2D{*entry.number("x"), *entry.number("y")});
+        if (const auto* FITTED = ROOT->array("fitted"))
+            for (const auto& entry : *FITTED)
+                if (const auto WS = entry.string("workspace"); WS && entry.number("w") && entry.number("h"))
+                    layout.fitted.emplace_back(*WS, Vector2D{*entry.number("w"), *entry.number("h")});
         if (const auto* WINDOWS = ROOT->array("windows"))
             for (const auto& entry : *WINDOWS) {
                 const auto FRAME = box(entry, "x", "y", "w", "h");
@@ -83,10 +89,18 @@ namespace Expanse::Store {
             out += std::format("\n  \"hotCorner\": {},", Json::quote(*layout.hotCorner));
         if (layout.wallpaper)
             out += std::format("\n  \"wallpaper\": {},", *layout.wallpaper);
+        if (layout.names)
+            out += std::format("\n  \"names\": {},", *layout.names);
+        if (layout.logging)
+            out += "\n  \"logging\": true,";
         out += "\n  \"scrolled\": [";
         for (size_t i = 0; i < layout.scrolled.size(); ++i)
             out += std::format("{}\n    {{\"workspace\": {}, \"x\": {}, \"y\": {}}}", i ? "," : "", Json::quote(layout.scrolled[i].first), layout.scrolled[i].second.x,
                                layout.scrolled[i].second.y);
+        out += "\n  ],\n  \"fitted\": [";
+        for (size_t i = 0; i < layout.fitted.size(); ++i)
+            out += std::format("{}\n    {{\"workspace\": {}, \"w\": {}, \"h\": {}}}", i ? "," : "", Json::quote(layout.fitted[i].first), layout.fitted[i].second.x,
+                               layout.fitted[i].second.y);
         out += "\n  ],\n  \"windows\": [";
         for (size_t i = 0; i < layout.windows.size(); ++i) {
             const auto& W = layout.windows[i];

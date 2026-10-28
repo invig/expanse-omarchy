@@ -1,6 +1,7 @@
 #define WLR_USE_UNSTABLE
 
 #include "Canvas.hpp"
+#include "Log.hpp"
 #include "Later.hpp"
 #include "Toast.hpp"
 
@@ -105,8 +106,9 @@ namespace Expanse {
             return true;
         }
 
-        // Another monitor's own, as long as no drag started here.
-        if (!onCanvasMonitor(pos))
+        // Another monitor's own, as long as no drag started here; and a window
+        // pinned above the canvas is its own.
+        if (!onCanvasMonitor(pos) || pinnedAt(pos))
             return false;
 
         const auto HOVER = windowAt(pos);
@@ -221,12 +223,16 @@ namespace Expanse {
             if (pressed) {
                 const auto WINDOW = windowUnderPointer();
                 m_press           = {POS, WINDOW, WINDOW && WINDOW == m_inWindow.lock()};
-            } else if (const auto WINDOW = m_press.window.lock(); WINDOW && !m_press.wasFocused && POS.distance(m_press.pos) <= CLICK_SLOP && !fullyVisible(WINDOW))
+            } else if (const auto WINDOW = m_press.window.lock();
+                       WINDOW && !m_press.wasFocused && POS.distance(m_press.pos) <= CLICK_SLOP && !fullyVisible(WINDOW) && !(m_viewPlaced && showsEnough(WINDOW)))
                 glideLater(WINDOW, false);
             return false;
         }
 
         const auto POS = pointer();
+        // A window pinned above the canvas takes its own clicks.
+        if (m_drag.kind == SDrag::DRAG_NONE && pinnedAt(POS))
+            return false;
         if (pressed)
             interruptDive();
 
@@ -250,7 +256,7 @@ namespace Expanse {
             if (DRAG.kind == SDrag::DRAG_WINDOW && DRAG.moved) {
                 for (const auto& [ref, box] : DRAG.starts)
                     if (const auto WINDOW = ref.lock())
-                        noteUserMove(WINDOW, WINDOW->position(Desktop::View::IGeometric::GEOMETRIC_GOAL) - box.pos());
+                        noteUserMove(WINDOW);
                 scheduleSave();
             }
             // A click (no drag) on a window dives into it.
@@ -589,10 +595,30 @@ namespace Expanse {
         wl_event_source_timer_update(m_focusTimer, FOCUS_SETTLE_MS);
     }
 
+    bool CCanvas::pinnedAt(const Vector2D& pos) const {
+        const auto MONITOR = m_monitor.lock();
+        for (const auto& window : Desktop::windowState()->windows())
+            if (window->m_isMapped && window->m_pinned && !window->isHidden() && window->m_monitor.lock() == MONITOR &&
+                CBox{window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL), window->size(Desktop::View::IGeometric::GEOMETRIC_GOAL)}.containsPoint(pos))
+                return true;
+        return false;
+    }
+
+    bool CCanvas::showsEnough(const PHLWINDOW& window) {
+        SOnMonitor here{*this, window->m_monitor.lock()};
+        const CBox SHOWING = screenBox(window).intersection(usableArea());
+        return SHOWING.w >= PARKED_SHOWING && SHOWING.h >= PARKED_SHOWING;
+    }
+
     void CCanvas::focusSettled() {
         const auto WINDOW = Desktop::focusState()->window();
         if (m_paused || live() || !WINDOW || std::chrono::steady_clock::now() < m_settledAt || !offItsScreen(WINDOW))
             return;
+        // Partly on screen, in a view you put there: it's the one you clicked, not one to go to.
+        if (m_viewPlaced && showsEnough(WINDOW)) {
+            Log::info("view placed by you: {} focused where it is", logName(WINDOW));
+            return;
+        }
         if (m_autoCentre) {
             glideTo(WINDOW, true);
             return;

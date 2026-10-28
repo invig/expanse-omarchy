@@ -1,6 +1,7 @@
 #define WLR_USE_UNSTABLE
 
 #include "Canvas.hpp"
+#include "Log.hpp"
 #include "HotCorner.hpp"
 #include "Mode.hpp"
 #include "Later.hpp"
@@ -52,7 +53,6 @@ namespace Expanse {
     constexpr double FIT_INSET          = 80.0; // canvas px around everything, when fitting
     constexpr double MIN_SCALE          = 0.03;
     constexpr double MAX_SCALE          = 1.5;
-    constexpr double TIDY_MARGIN        = 16.0;
     constexpr double CLOSE_SIZE         = 26.0;
     constexpr double CLOSE_INSET        = 10.0;
     constexpr double CLOSE_MIN_WIDTH    = 220.0; // narrower on screen, a window shows no ×
@@ -165,6 +165,21 @@ namespace Expanse {
         std::string app = window->m_initialClass;
         std::ranges::transform(app, app.begin(), [](unsigned char c) { return std::tolower(c); });
         return APPS.contains(app) || app.starts_with("qemu");
+    }
+
+    std::string logName(const PHLWINDOW& window) {
+        return window ? std::format("{}[0x{:x}]", window->m_initialClass, reinterpret_cast<uintptr_t>(window.get())) : "-";
+    }
+
+    bool isDialog(const PHLWINDOW& window) {
+        // The canvas never covers these, as on the Mac it never covers
+        // another app's dialog: a dialog, a password prompt (a polkit agent's,
+        // pinentry's, the keyring's), or a window pinned above every other.
+        if (window->parent() || window->isModal() || window->m_pinned)
+            return true;
+        std::string app = window->m_initialClass;
+        std::ranges::transform(app, app.begin(), [](unsigned char c) { return std::tolower(c); });
+        return app.contains("polkit") || app.contains("pinentry") || app == "gcr-prompter";
     }
 
     std::optional<eDirection> parseDirection(const std::string& text) {
@@ -286,6 +301,14 @@ namespace Expanse {
         raise(window);
 
         ++m_glides;
+        if (!FROMIDLE && m_viewPlaced && std::abs(m_camera.scale - 1.0) < 0.001 && showsEnough(window)) {
+            // You put the view here: the window you picked is on screen, and the view stays.
+            Log::info("view placed by you: diving into {} where it is", logName(window));
+            animateTo({m_camera.origin.round(), 1.0}, STATE_GLIDING, SECONDS);
+            return;
+        }
+        m_viewPlaced = false;
+        Log::info("glide to {}{}", logName(window), FROMIDLE ? (fromKeyboard ? " (keyboard focus)" : "") : " (picked on the canvas)");
         animateTo(cameraFor(window), STATE_GLIDING, SECONDS);
     }
 
@@ -450,7 +473,7 @@ namespace Expanse {
         m_lastAnimation    = std::format("first frame after {}ms, {} frames, max gap {}ms{}", sc<int>(FIRST * 1000), m_animFrames.frames,
                                          sc<int>(m_animFrames.maxGap * 1000), late ? ", ended by the timer" : "");
         if (late || m_animFrames.maxGap > 0.034 || FIRST > 0.034)
-            Log::logger->log(Log::INFO, "[expanse] slow: animation {}", m_lastAnimation);
+            Log::info("slow: animation {}", m_lastAnimation);
         if (m_state == STATE_OPENING)
             m_state = STATE_OVERVIEW;
         else if (m_state == STATE_GLIDING) {
@@ -518,6 +541,7 @@ namespace Expanse {
         if (m_state != STATE_OVERVIEW && m_state != STATE_OPENING)
             return;
         cameraMovedByUser();
+        m_viewPlaced = std::abs(m_camera.scale - 1.0) < 0.001;
         setCamera({m_camera.origin - screenDelta / m_camera.scale, m_camera.scale});
     }
 
@@ -525,6 +549,7 @@ namespace Expanse {
         if (m_state != STATE_OVERVIEW && m_state != STATE_OPENING)
             return;
         cameraMovedByUser();
+        m_viewPlaced = false;
         setCamera(zoomedAround(m_camera, m_camera.scale * factor, anchor));
     }
 
@@ -535,6 +560,7 @@ namespace Expanse {
         if (!MONITOR)
             return;
         cameraMovedByUser();
+        m_viewPlaced       = false;
         const SCamera FROM = m_animating ? m_to : m_camera;
         animateTo(zoomedAround(FROM, scale, MONITOR->m_position + MONITOR->m_size / 2.0), STATE_OVERVIEW, CAMERA_SECONDS);
     }
@@ -655,6 +681,36 @@ namespace Expanse {
         updateCursor();
         scheduleSave();
         placeUnplaced();
+
+        // A dialog that opened during the glide.
+        if (const auto DIALOG = m_dialog.lock(); DIALOG && DIALOG->m_isMapped) {
+            m_dialog.reset();
+            later([this, ref = PHLWINDOWREF{DIALOG}] {
+                const auto WINDOW = ref.lock();
+                if (!WINDOW || !WINDOW->m_isMapped || live())
+                    return;
+                Desktop::focusState()->fullWindowFocus(WINDOW, Desktop::FOCUS_REASON_CLICK);
+                if (offItsScreen(WINDOW))
+                    glideTo(WINDOW, false);
+            });
+        }
+        m_dialog.reset();
+    }
+
+    void CCanvas::makeWay(const PHLWINDOW& dialog) {
+        // Zoomed out, the canvas goes to the dialog (on the canvas, it glides
+        // there; above it, back to 100%). Mid-glide, it does once it lands.
+        if (!live())
+            return;
+        if (m_state == STATE_GLIDING) {
+            m_dialog = dialog;
+            return;
+        }
+        Log::info("making way for {}: a dialog, prompt or pinned window opened with the canvas up", logName(dialog));
+        if (isCanvasWindow(dialog))
+            glideTo(dialog, false);
+        else
+            close();
     }
 
     void CCanvas::placeUnplaced() {
@@ -743,18 +799,23 @@ namespace Expanse {
         // arrived tiled tiles again, and the rest stays in view.
         if (live() && workspace == m_workspace.lock())
             reset();
+        int dropped = 0, tiled = 0;
         std::erase_if(m_originals, [&](const STracked& entry) {
             const auto WINDOW = entry.window.lock();
             if (!WINDOW || WINDOW->m_workspace != workspace)
                 return false;
             const auto TARGET = WINDOW->m_isMapped ? WINDOW->layoutTarget() : nullptr;
-            if (entry.wasTiled && TARGET && TARGET->floating() && !Fullscreen::controller()->isFullscreen(WINDOW))
+            ++dropped;
+            if (entry.wasTiled && TARGET && TARGET->floating() && !Fullscreen::controller()->isFullscreen(WINDOW)) {
                 g_layoutManager->changeFloatingMode(TARGET);
-            else
+                ++tiled;
+            } else
                 leaveFloating(entry);
             return true;
         });
+        Log::info("workspace {} took another layout: dropped {} windows, {} tiled again", workspace->m_name, dropped, tiled);
         m_scrolled.erase(workspace->m_name);
+        m_fitted.erase(workspace->m_name);
         scheduleSave();
     }
 
@@ -768,6 +829,7 @@ namespace Expanse {
             if (auto* entry = tracked(window)) {
                 entry->wasTiled = true;
                 entry->box      = TARGET->position();
+                Log::info("took over {} from Omarchy's floating", logName(window));
             }
         }
         scheduleSave();
@@ -787,6 +849,7 @@ namespace Expanse {
             return true;
         });
         m_scrolled.erase(workspace->m_name);
+        Log::info("workspace {} to Omarchy's floating: {} windows handed over where they are", workspace->m_name, released.size());
         scheduleSave();
         return released;
     }
@@ -803,6 +866,7 @@ namespace Expanse {
         if (IT->wasTiled && TARGET && TARGET->floating() && !Fullscreen::controller()->isFullscreen(window))
             g_layoutManager->changeFloatingMode(TARGET);
         m_originals.erase(IT);
+        Log::info("dropped {}: moved to workspace {}, whose layout is {}", logName(window), window->m_workspace->m_name, Mode::layoutName(window->m_workspace));
         scheduleSave();
     }
 
@@ -881,6 +945,14 @@ namespace Expanse {
     }
 
     void CCanvas::onWindowOpen(PHLWINDOW window) {
+        // A dialog opening while the canvas is up would wait unseen, the
+        // canvas having the keyboard: the canvas makes way for it.
+        if (!m_paused && window && live() && !window->isX11OverrideRedirect() && isDialog(window))
+            later([this, ref = PHLWINDOWREF{window}] {
+                if (const auto WINDOW = ref.lock(); WINDOW && WINDOW->m_isMapped)
+                    makeWay(WINDOW);
+            });
+
         // A new standard window opens in free space beside the window it came
         // from, instead of on top of it. Dialogs keep the spot their app gives
         // them.
@@ -947,6 +1019,11 @@ namespace Expanse {
         // A window that had a spot last time (an app opened again, or after a
         // restart, on any workspace) goes back to it.
         if (placeFromSaved(window, FRESH)) {
+            Log::info("back to its spot: {}", logName(window));
+            // Its spot was for the screen it closed on: fitted to this one
+            // from its home spot, the rest staying where they are.
+            if (isCanvasWindow(window))
+                fitLayoutToScreen(false, std::vector<PHLWINDOW>{window});
             scheduleSave();
             if (SHOWING && isCanvasWindow(window) && !live() && !fullyVisible(window))
                 glideToArrival(window);
@@ -1061,7 +1138,7 @@ namespace Expanse {
             noteOriginal(window);
         noteSizes();
         updateHome();
-        fitLayoutToScreen(TIDY_MARGIN, true);
+        fitLayoutToScreen(true);
 
         cameraMovedByUser();
         animateTo(fitCamera(1.0), STATE_OVERVIEW, CAMERA_SECONDS);
@@ -1113,11 +1190,16 @@ namespace Expanse {
                 continue;
             // Its home spot and chosen size; fitting works out where it goes on this screen.
             entry->home         = MATCH->home.value_or(MATCH->frame.pos());
+            entry->homeKnown    = true;
             const Vector2D SIZE = MATCH->preferred.value_or(MATCH->frame.size());
             if (SIZE.x > 0 && SIZE.y > 0 && !sizesItself(window))
                 entry->preferred = SIZE;
+            // At its home spot to start from, as the Mac's: fitting then finds
+            // nothing out of place to re-home.
+            moveWindow(window, entry->home - scrolledFor(WORKSPACE));
         }
-        fitLayoutToScreen(0, false);
+        Log::info("restoring a layout from {} windows' spots", pool.size());
+        fitLayoutToScreen(false);
 
         cameraMovedByUser();
         animateTo(fitCamera(1.0), STATE_OVERVIEW, CAMERA_SECONDS);
@@ -1161,6 +1243,19 @@ namespace Expanse {
     bool CCanvas::wallpaper() const {
         static auto PWALLPAPER = CConfigValue<Config::BOOL>("plugin:expanse:wallpaper");
         return m_wallpaper.value_or(*PWALLPAPER);
+    }
+
+    void CCanvas::setNames(std::optional<bool> on) {
+        m_names = on;
+        damage();
+        scheduleSave();
+    }
+
+    bool CCanvas::names() const {
+        // App names above the windows (and the hovered one's title), as on
+        // the Mac: off unless turned on.
+        static auto PNAMES = CConfigValue<Config::BOOL>("plugin:expanse:window_names");
+        return m_names.value_or(*PNAMES);
     }
 
     void CCanvas::setHotCorner(std::optional<std::string> corner) {
@@ -1541,9 +1636,9 @@ namespace Expanse {
         const auto MAP       = minimap();
         const auto HINT      = m_offscreenHint.lock();
         const auto SCROLLED  = scrolledFor(WORKSPACE);
-        return std::format(R"({{"state":"{}","paused":{},"workspace":"{}","scale":{:.3f},"origin":[{:.1f},{:.1f}],"scrolled":[{:.1f},{:.1f}],"autoCentre":{},"wallpaper":{},"hotCorner":"{}","hover":"{}","target":"{}","marquee":{},"minimap":{},"offscreenNotice":"{}","lastAnimation":"{}","glides":{},"library":"{}","windows":[{}],"spaces":[{}]}})",
+        return std::format(R"({{"state":"{}","paused":{},"workspace":"{}","scale":{:.3f},"origin":[{:.1f},{:.1f}],"scrolled":[{:.1f},{:.1f}],"autoCentre":{},"wallpaper":{},"names":{},"logging":{},"viewPlaced":{},"hotCorner":"{}","hover":"{}","target":"{}","marquee":{},"minimap":{},"offscreenNotice":"{}","lastAnimation":"{}","glides":{},"library":"{}","windows":[{}],"spaces":[{}]}})",
                            STATES[m_state], m_paused, WORKSPACE ? jsonEscape(WORKSPACE->m_name) : "", m_camera.scale, m_camera.origin.x, m_camera.origin.y, SCROLLED.x,
-                           SCROLLED.y, m_autoCentre, wallpaper(), jsonEscape(g_hotCorner.corner()), HOVER ? jsonEscape(HOVER->m_title) : "", TARGET ? jsonEscape(TARGET->m_title) : "",
+                           SCROLLED.y, m_autoCentre, wallpaper(), names(), Log::fileOn(), m_viewPlaced, jsonEscape(g_hotCorner.corner()), HOVER ? jsonEscape(HOVER->m_title) : "", TARGET ? jsonEscape(TARGET->m_title) : "",
                            MARQUEE ? std::format("[{:.1f},{:.1f},{:.1f},{:.1f}]", MARQUEE->x, MARQUEE->y, MARQUEE->w, MARQUEE->h) : "null",
                            MAP ? std::format("[{:.0f},{:.0f},{:.0f},{:.0f}]", MAP->box.x, MAP->box.y, MAP->box.w, MAP->box.h) : "null", HINT ? jsonEscape(HINT->m_class) : "", m_lastAnimation, m_glides, jsonEscape(library()),
                            windows, spaces) +

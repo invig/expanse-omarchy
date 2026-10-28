@@ -12,4 +12,5 @@ namespace Expanse::Mode {
     bool add(HANDLE handle);
     void remove(HANDLE handle);
     bool isExpanse(const PHLWORKSPACE& workspace);
+    std::string layoutName(const PHLWORKSPACE& workspace); // its tiled layout's name, for the log
 }

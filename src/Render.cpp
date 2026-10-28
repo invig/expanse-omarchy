@@ -92,8 +92,8 @@ namespace Expanse::Render {
     // size) or popups (theirs aren't moved with it). As on the Mac, where a
     // menu is a window of its own and closes as the canvas takes the
     // keyboard, an open menu isn't on the canvas; back at 100% it's there.
-    static void renderWindow(PHLWINDOW window, PHLMONITOR monitor, const Time::steady_tp& now) {
-        (g_pHyprRenderer.get()->*robbed(SRenderWindowTag{}))(window, monitor, now, false, ::Render::RENDER_PASS_MAIN, false, false);
+    static void renderWindow(PHLWINDOW window, PHLMONITOR monitor, const Time::steady_tp& now, bool decorate = false) {
+        (g_pHyprRenderer.get()->*robbed(SRenderWindowTag{}))(window, monitor, now, decorate, ::Render::RENDER_PASS_MAIN, false, false);
     }
 
     static void setHiddenQuietly(const PHLWINDOW& window, bool hidden) {
@@ -138,6 +138,7 @@ namespace Expanse::Render {
         PHLMONITORREF          monitor;
         std::vector<PHLWINDOW> hidden;
         std::vector<PHLWINDOW> foreign; // other monitors' windows, not drawn on this one
+        std::vector<PHLWINDOW> above;   // pinned windows, drawn over the canvas
         std::vector<SRestore>  restore;
         Time::steady_tp        now;
     };
@@ -677,12 +678,38 @@ namespace Expanse::Render {
         g_frame.now     = Time::steadyNow();
         for (const auto& window : g_frame.hidden)
             setHiddenQuietly(window, true);
+        // As on the Mac the canvas never covers another app's dialog: windows
+        // pinned above the rest (picture in picture, say) stay above it.
+        if (g_frame.hidden.empty())
+            return;
+        for (const auto& window : Desktop::windowState()->windows()) {
+            if (window->m_isMapped && window->m_pinned && !window->isHidden() && window->m_monitor.lock() == monitor) {
+                setHiddenQuietly(window, true);
+                g_frame.above.push_back(window);
+            }
+        }
     }
 
     static void unhideCanvasWindows() {
         for (const auto& window : g_frame.hidden)
             setHiddenQuietly(window, false);
         g_frame.hidden.clear();
+    }
+
+    static void unhideAbove() {
+        for (const auto& window : g_frame.above)
+            setHiddenQuietly(window, false);
+        g_frame.above.clear();
+    }
+
+    static void drawAbove() {
+        const auto MONITOR = g_frame.monitor.lock();
+        const auto ABOVE   = g_frame.above;
+        unhideAbove();
+        if (!MONITOR || g_pHyprRenderer->m_renderData.pMonitor != MONITOR)
+            return;
+        for (const auto& window : ABOVE)
+            renderWindow(window, MONITOR, g_frame.now, true);
     }
 
     static void restoreGeometry() {
@@ -743,7 +770,7 @@ namespace Expanse::Render {
     }
 
     void prepareLabels() {
-        if (!g_pCompositor || !g_pCompositor->m_wlEventLoop)
+        if (!g_pCompositor || !g_pCompositor->m_wlEventLoop || !g_canvas.names())
             return;
         if (!g_prepareTimer)
             g_prepareTimer = wl_event_loop_add_timer(
@@ -763,7 +790,14 @@ namespace Expanse::Render {
         wl_event_source_timer_update(g_prepareTimer, 100);
     }
 
+    static void drawCanvasWindows();
+
     static void drawCanvas() {
+        drawCanvasWindows();
+        drawAbove();
+    }
+
+    static void drawCanvasWindows() {
         const auto MONITOR = g_frame.monitor.lock();
         if (g_frame.hidden.empty() || !MONITOR || g_pHyprRenderer->m_renderData.pMonitor != MONITOR)
             return;
@@ -825,7 +859,8 @@ namespace Expanse::Render {
                 addBorder(toPixels(screens[i], MONITOR), ACCENT, SELECTED ? 3 : 2, std::round(window->rounding() * g_canvas.scale() * MONITOR->m_scale));
             if (closes[i])
                 addCloseButton(MONITOR, screens[i]);
-            addLabel(MONITOR, window, screens[i], window == HOVER, PLAIN);
+            if (g_canvas.names())
+                addLabel(MONITOR, window, screens[i], window == HOVER, PLAIN);
         }
 
         if (!DECORATED)
@@ -879,6 +914,7 @@ namespace Expanse::Render {
             // windows back.
             case RENDER_LAST_MOMENT:
                 unhideCanvasWindows();
+                unhideAbove();
                 unhideForeignWindows();
                 if (const auto MONITOR = g_rendering.lock()) {
                     Toast::draw(MONITOR);
@@ -894,6 +930,7 @@ namespace Expanse::Render {
             // The pass has drawn; the windows get their real geometry back.
             case RENDER_POST: {
                 unhideCanvasWindows();
+                unhideAbove();
                 unhideForeignWindows();
                 restoreGeometry();
                 g_rendering.reset();
@@ -919,6 +956,7 @@ namespace Expanse::Render {
         updateParking(false, {});
         unhideForeignWindows();
         unhideCanvasWindows();
+        unhideAbove();
         restoreGeometry();
         g_labels.clear();
         g_closeGlyph = {};

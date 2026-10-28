@@ -31,6 +31,8 @@ end
 
 -- The canvas on a plain background instead of the dimmed desktop picture.
 -- hl.config({ plugin = { expanse = { wallpaper = false } } })
+-- App names above the windows on the canvas (off, as on the Mac):
+-- hl.config({ plugin = { expanse = { window_names = true } } })
 
 -- ALT + ` zooms out to every window and back, as on the Mac.
 bind("ALT + grave", "Zoom out to every window", hl.plugin.expanse.overview())

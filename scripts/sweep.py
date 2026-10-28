@@ -790,7 +790,7 @@ if parent:
 
 # The Omarchy menu rows.
 rows = json.loads("\n".join(line for line in open(os.path.join(HERE, "..", "examples", "omarchy-menu.jsonc")) if not line.strip().startswith("//")))
-verbs = {"toggle", "tidy", "centre", "layout", "restore", "autocentre", "wallpaper", "pause", "corner"}
+verbs = {"toggle", "tidy", "centre", "layout", "restore", "autocentre", "wallpaper", "names", "pause", "corner"}
 actions_ok = all(r.get("action", "hyprctl expanse tidy").split()[2] in verbs if r.get("action", "").startswith("hyprctl expanse") else r["action"].startswith("omarchy-launch-")
                  for r in rows.values() if "action" in r)
 checked_ok = all(subprocess.run(SSH + [ENV + r[key]], capture_output=True).returncode in (0, 1) for r in rows.values() for key in ("checked", "when") if key in r)
@@ -1480,6 +1480,112 @@ for c in clients():
     if c["class"].startswith(f"sweep-") and c["class"].endswith(RUN) or c["class"].startswith(f"{G}-") or c["class"] == DIALOG:
         vm(f"kill {c['pid']}")
 APPS += [D, E, F, G, K]
+
+# ===== As on the Mac 0.1.22-0.1.25.
+qmp("key", "esc")
+settle()
+P1, P2, PIN, PROMPT = (f"sweep-{name}-{RUN}" for name in ("p1", "p2", "pin", "polkit"))
+APPS += [P1, P2, PIN, PROMPT]
+
+
+def red(hex_colour):
+    # Clearly red, give or take what shows through a slightly transparent window.
+    r, g, b = (int(hex_colour[i:i + 2], 16) for i in (0, 2, 4)) if len(hex_colour) >= 6 else (0, 0, 0)
+    return r > 150 and r - g > 80 and r - b > 80
+
+
+def region(x, y, w, h):
+    # A small strip of the screen, as a hash: whether anything there changed.
+    return vm(f'grim -g "{int(x)},{int(y)} {int(w)}x{int(h)}" - | md5sum').split()[0]
+
+
+# Window names: off unless turned on.
+ctl("names default")
+open_app(P1, "700 440")
+settle()
+check("window names are off unless turned on", ctl()["names"] is False)
+zoom_out()
+w = mine()[P1]["screen"]
+strip = (w[0] + 2, w[1] - 22, min(80, w[2] - 4), 16)  # where its name goes, just above it
+off = region(*strip)
+ctl("names on")
+wait(1.2)
+on = region(*strip)
+check("Window Names on puts the app's name above each window", ctl()["names"] is True and on != off)
+ctl("names default")
+qmp("key", "esc")
+settle()
+
+# A window pinned above the rest stays above the canvas, at its own size, and takes its own clicks.
+vm(f'hyprctl dispatch "hl.dsp.exec_cmd(\\"foot -o colors-dark.background=cc3333 --app-id={PIN} sleep infinity\\", {{ float = true, size = \\"480 300\\" }})"')
+wait(2.4)
+mid = screen_middle()
+vm(f'hyprctl dispatch "hl.dsp.window.pin({{ window = \\"class:{PIN}\\" }})"')
+vm(f'hyprctl dispatch "hl.dsp.window.move({{ x = {int(mid[0] - 240)}, y = {int(mid[1] - 150)}, window = \\"class:{PIN}\\" }})"')
+wait(1)
+pin = client(PIN)
+spots = [(pin["at"][0] + 40, pin["at"][1] + 40), (pin["at"][0] + 240, pin["at"][1] + 150), (pin["at"][0] + 440, pin["at"][1] + 260)]
+before = [pixel(*p) for p in spots]
+zoom_out()
+during = [pixel(*p) for p in spots]
+check("a window pinned above the rest stays above the canvas, at its own size", all(map(red, before + during)), f"{before} -> {during}")
+point(*spots[1])
+qmp("click", "sleep", 800)
+check("and takes its own clicks while zoomed out", active() == PIN and ctl()["state"] == "overview", f"{active()} {ctl()['state']}")
+qmp("key", "esc")
+settle()
+vm(f"kill {client(PIN)['pid']}")
+wait(1)
+
+# A password prompt (or dialog) opening while zoomed out brings you back to it.
+zoom_out()
+open_app(PROMPT, "500 260")
+wait(1)
+check("a password prompt opening while zoomed out brings you back to it", ctl()["state"] == "idle" and active() == PROMPT, f"{ctl()['state']} {active()}")
+settle()
+vm(f"kill {client(PROMPT)['pid']}")
+wait(1)
+
+# After you pan at 100%, clicking (or diving into) a window you can see focuses it where it is.
+focus(P1)
+settle()
+vm(f'hyprctl dispatch "hl.dsp.window.move({{ x = {int(OX - 300)}, y = {int(mid[1] - 220)}, window = \\"class:{P1}\\" }})"')
+wait(1)
+open_app(P2, "500 300")
+focus(P2)
+settle()
+spot = empty_spot(ctl(), avoid_corner=True)
+point(*spot)
+qmp("wheel", "down", 3, "sleep", 700)  # the first notch opens the canvas at 100%, the rest pan
+check("scrolling at 100% puts the view where you want it", ctl()["viewPlaced"] is True)
+glides = ctl()["glides"]
+partly = client(P1)["at"]
+point(partly[0] + 360, partly[1] + 220)
+qmp("click", "sleep", 1500)
+settle()
+check("after you pan at 100%, diving into a window you can see focuses it where it is",
+      active() == P1 and ctl()["glides"] == glides + 1 and client(P1)["at"][0] < OX, f"{active()} {client(P1)['at']}")
+focus(P2)
+wait(1.5)
+glides = ctl()["glides"]
+partly = client(P1)["at"]
+point(partly[0] + 360, partly[1] + 220)
+qmp("click", "sleep", 1500)
+check("and so does a click at 100%, until the next glide", active() == P1 and ctl()["glides"] == glides and client(P1)["at"][0] < OX, f"{active()} {ctl()['glides'] - glides}")
+ctl(f"focus {P2}")
+settle()
+
+# Expanse's log names windows by app, never by title; the bug report is ready for GitHub.
+vm(f'hyprctl dispatch "hl.dsp.exec_cmd(\\"foot --app-id={P2}-t --title=secret-title-{RUN} sleep infinity\\", {{ float = true, size = \\"400 240\\" }})"')
+APPS.append(f"{P2}-t")
+wait(2.4)
+log = vm("hyprctl expanse log")
+check("Expanse's log says why windows come and go, naming them by app, never by title",
+      f"tracking {P1}[" in log and "dropped" in log and f"secret-title-{RUN}" not in log)
+vm(OMARCHY + "timeout 20 ~/expanse-hypr/omarchy/expanse report </dev/null >/dev/null 2>&1")
+report = vm("timeout 3 wl-paste </dev/null")
+check("Copy Logs for a Bug Report puts versions, monitors, settings and the log on the clipboard",
+      report.startswith("### Expanse") and "- Hyprland" in report and "- Monitors:" in report and f"tracking {P1}[" in report and f"secret-title-{RUN}" not in report)
 
 # --- Clean up.
 for c in json.loads(vm("hyprctl clients -j")):

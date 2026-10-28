@@ -140,6 +140,13 @@ namespace Expanse::Mode {
         HyprlandAPI::removeAlgo(handle, NAME);
     }
 
+    std::string layoutName(const PHLWORKSPACE& workspace) {
+        if (!workspace || !workspace->m_space)
+            return "?";
+        const auto ALGORITHM = workspace->m_space->algorithm();
+        return ALGORITHM && ALGORITHM->tiledAlgo() ? ALGORITHM->tiledAlgo()->layoutName().value_or("?") : "?";
+    }
+
     bool isExpanse(const PHLWORKSPACE& workspace) {
         if (!workspace || workspace->m_isSpecialWorkspace || !workspace->m_space)
             return false;

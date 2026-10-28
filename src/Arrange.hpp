@@ -75,10 +75,52 @@ namespace Expanse::Arrange {
     // group has grown into its space.
     void tidyUp(std::vector<CBox>& frames);
 
-    // Origins for windows of `sizes` that keep the `home` layout's gaps: each
-    // window keeps its distance to its nearest window on the left (and above),
-    // so shrinking windows pull the layout in.
+    // x and y swapped, to run a horizontal layout rule vertically.
+    CBox transposed(const CBox& box);
+
+    // What a window's x keeps from one layout to the next: its gap to another
+    // window's right edge, or its left edge's offset from another window's.
+    struct SAnchor {
+        bool   edge  = false;
+        size_t other = 0;
+        bool   operator==(const SAnchor&) const = default;
+    };
+
+    // Window `i`'s anchor among `frames` (for y, pass them transposed): the
+    // nearest window on the left, rows that don't line up counting extra; or,
+    // when nearer, a window above or below, its left edge's offset counting
+    // extra (gaps win ties). Only windows before it in left-to-right order,
+    // which derive has placed already.
+    std::optional<SAnchor> anchor(size_t i, const std::vector<CBox>& frames);
+
+    // Every anchor as near as the nearest (see anchor), first one first.
+    std::vector<SAnchor> anchors(size_t i, const std::vector<CBox>& frames);
+
+    // Origins for windows of `sizes` that keep the `home` layout where you see
+    // it: each window keeps its gap to its nearest window on the left or,
+    // nearer still, its left edge's offset from a window above or below it (a
+    // column stays lined up); the same for top edges. So shrinking windows
+    // pull the layout in, and a window keeps with its own group rather than
+    // the next group over. With home sizes this returns the home origins
+    // exactly. Callers push apart any overlap left.
     std::vector<Vector2D> derive(const std::vector<CBox>& home, const std::vector<Vector2D>& sizes);
+
+    // A home spot for window `i` that puts it back where it is `here`: it
+    // keeps what derive keeps (see anchor), measured here and applied to the
+    // anchor's spot in `home`. The inverse of derive, for a window whose spot
+    // came from this screen rather than from the home layout.
+    Vector2D homeSpot(size_t i, const std::vector<CBox>& here, const std::vector<CBox>& home);
+
+    // Windows whose home spot doesn't explain where they are `here`: opened
+    // while the screen was smaller (no home spot yet), left where they were
+    // when a window beside them closed, or overlapping a window in the home
+    // layout that they're clear of here. A bigger screen would move them by
+    // the wrong amount. Each gets a home spot from its neighbours here (see
+    // homeSpot), so it moves along with them. `homes` (none for a window with
+    // no home spot yet) are updated; `sizes` are the sizes here. Returns the
+    // windows given a new home spot.
+    std::set<size_t> rehome(const std::vector<CBox>& here, std::vector<std::optional<Vector2D>>& homes, const std::vector<Vector2D>& homeSizes,
+                            const std::vector<Vector2D>& sizes);
 
     // An origin for a window of `size` that overlaps none of `others`. First
     // anywhere along an edge of `anchor`, the window it came from: right,

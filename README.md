@@ -38,8 +38,8 @@ workspace through tiling, scrolling, floating and Expanse.
 - **A canvas for every workspace, or just some.** Make Expanse the layout of every workspace, or
   only of the ones you switch to it. Each keeps its own canvas, and each monitor zooms out on its
   own.
-- **At home on a laptop or a big display.** On a smaller screen the layout tightens up, and
-  plugging back in puts it back exactly.
+- **At home on a laptop or a big display.** On a smaller screen the layout tightens up, columns
+  staying lined up, and plugging back in puts it back exactly.
 - **Easy to leave.** Switch a workspace to another layout, pause Expanse or remove it, and every
   window goes straight back to where Hyprland had it, tiled ones back into their layout.
 
@@ -105,9 +105,15 @@ On a workspace in another layout, <kbd>Super</kbd> + arrows move the focus as Om
 **Full-screen windows** step out of full screen while you're zoomed out, back to their place among
 the others, and go back to full screen when you return to them.
 
+**Window names** above the windows are off, as on the Mac; turn them on from the bar icon.
+
+**Dialogs and password prompts** never wait unseen behind the canvas: one that opens while you're
+zoomed out brings you back to it. A window pinned above the rest (picture in picture) stays above
+the canvas too.
+
 **The bar icon** has the rest: Tidy Up, Centre Current Window, Restore Layout, Restore All
-Windows, auto-centring, the desktop picture, Pause, which corners to use, Expanse here or on
-every workspace, and the shortcuts. Right-click it to zoom out.
+Windows, auto-centring, the desktop picture, window names, Pause, which corners to use, Expanse
+here or on every workspace, Troubleshooting, and the shortcuts. Right-click it to zoom out.
 
 ## Questions
 
@@ -140,6 +146,16 @@ into view.
 </details>
 
 <details>
+<summary><strong>Something's not right: how do I report it?</strong></summary>
+
+From the bar icon › **Troubleshooting**: turn on **Detailed Logging**, do whatever went wrong
+again, then pick **Copy Logs for a Bug Report** and paste it into a new issue (**Report an Issue**
+opens one). The report has your Expanse, Hyprland and Omarchy versions, your monitors and
+settings, and Expanse's log, which names windows by app, never by their titles.
+
+</details>
+
+<details>
 <summary><strong>It stopped working after an update</strong></summary>
 
 Hyprland plugins are built for one exact Hyprland, so Expanse rebuilds itself at the next login
@@ -155,7 +171,9 @@ the bar icon's menu runs it again where you can see why. Please
 Nothing is sent anywhere: Expanse makes no network requests. Its build lives in
 `~/.local/share/expanse-omarchy/`, and the only other files it writes are its layouts in
 `~/.local/state/expanse/`: window positions and sizes, app names, and a scrambled fingerprint
-(a hash) of each window's title, which recognises the window without storing the title.
+(a hash) of each window's title, which recognises the window without storing the title. With
+Detailed Logging on, its log goes there too (`expanse.log`, at most 5 MB, the older half kept as
+`expanse.1.log`); it names windows by app, never by title.
 
 </details>
 
@@ -178,8 +196,6 @@ Nothing is sent anywhere: Expanse makes no network requests. Its build lives in
 - Expanse is a layout you choose per workspace, next to tiling, scrolling and floating; on the
   Mac it's every window. Every workspace in it has its own canvas, and every monitor its own view;
   the Mac uses one display.
-- An app you open again goes straight back to where its window was. On the Mac that waits for a
-  restart, since Mac apps hide and minimise windows to bring them back later.
 - Settings live in the bar icon's menu, and in Hyprland's config for the defaults.
 
 </details>
@@ -221,8 +237,9 @@ hyprctl expanse resume
 ```
 
 Also `open`, `close`, `fit`, `zoom <scale>`, `pan <dx> <dy>`, `select all`, `restore`,
-`autocentre <on|off|toggle>`, `wallpaper <on|off|toggle|default>`, `corner [<corner>|default]` and
-`keys`. In Lua, `hl.plugin.expanse.overview()`, `hop("left")`, `tidy()`, `centre()`,
+`autocentre <on|off|toggle>`, `wallpaper <on|off|toggle|default>`, `names <on|off|toggle|default>`,
+`corner [<corner>|default]`, `keys`, `log` (this run's log) and `logging [on|off|toggle]` (Detailed
+Logging). In Lua, `hl.plugin.expanse.overview()`, `hop("left")`, `tidy()`, `centre()`,
 `restore_layout(0)`, `auto_centre()`, `pause()` and `restore()` return actions for `hl.bind`.
 
 </details>
@@ -245,9 +262,10 @@ hl.config({ plugin = { expanse = { hot_corner = "all", wallpaper = false } } })
 ```
 
 `hot_corner` is `bottom` (the default), `all`, `top_left`, `top_right`, `bottom_left`,
-`bottom_right` or `off`; `wallpaper = false` puts the canvas on a plain background. These are
-defaults: a choice made from the bar icon wins until you pick the default again
-(`hyprctl expanse corner default`, `wallpaper default`). The keys are in
+`bottom_right` or `off`; `wallpaper = false` puts the canvas on a plain background;
+`window_names = true` shows app names above the windows. These are defaults: a choice made from
+the bar icon wins until you pick the default again (`hyprctl expanse corner default`,
+`wallpaper default`, `names default`). The keys are in
 [examples/expanse.lua](examples/expanse.lua); copy it and load your copy instead to change them.
 
 </details>

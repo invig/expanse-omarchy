@@ -375,10 +375,50 @@ namespace Expanse::Arrange {
         separateGroups(frames, groups, CLUSTER_REACH);
     }
 
-    std::vector<Vector2D> derive(const std::vector<CBox>& home, const std::vector<Vector2D>& sizes) {
+    CBox transposed(const CBox& box) {
+        return {box.y, box.x, box.h, box.w};
+    }
+
+    std::vector<SAnchor> anchors(size_t i, const std::vector<CBox>& frames) {
         // Distance between ranges; 0 when they overlap.
         const auto SPAN = [](double a0, double a1, double b0, double b1) { return std::max(0.0, std::max(a0, b0) - std::min(a1, b1)); };
+        struct SCost {
+            double  cost;
+            bool    edge;
+            SAnchor anchor;
+        };
+        const CBox&        R = frames[i];
+        std::vector<SCost> candidates;
+        for (size_t j = 0; j < frames.size(); ++j) {
+            if (j == i)
+                continue;
+            const CBox& O = frames[j];
+            if (maxX(O) <= minX(R) + 0.5)
+                candidates.push_back({minX(R) - maxX(O) + 2 * SPAN(minY(O), maxY(O), minY(R), maxY(R)), false, {false, j}});
+            else if (std::pair{minX(O), minY(O)} < std::pair{minX(R), minY(R)} && SPAN(minX(O), maxX(O), minX(R), maxX(R)) == 0 &&
+                     (maxY(O) <= minY(R) + 0.5 || maxY(R) <= minY(O) + 0.5))
+                candidates.push_back({SPAN(minY(O), maxY(O), minY(R), maxY(R)) + 2 * std::abs(minX(R) - minX(O)), true, {true, j}});
+        }
+        if (candidates.empty())
+            return {};
+        // The first of the cheapest, gaps before edges.
+        const SCost* best = &candidates.front();
+        for (const auto& c : candidates)
+            if (std::pair{c.cost, c.edge ? 1 : 0} < std::pair{best->cost, best->edge ? 1 : 0})
+                best = &c;
+        std::vector<SAnchor> out;
+        for (const auto& c : candidates)
+            if (c.edge == best->edge && c.cost <= best->cost + 0.5)
+                out.push_back(c.anchor);
+        return out;
+    }
 
+    std::optional<SAnchor> anchor(size_t i, const std::vector<CBox>& frames) {
+        const auto ALL = anchors(i, frames);
+        return ALL.empty() ? std::nullopt : std::optional{ALL.front()};
+    }
+
+    std::vector<Vector2D> derive(const std::vector<CBox>& home, const std::vector<Vector2D>& sizes) {
         std::vector<double> x(home.size()), y(home.size());
         for (size_t i = 0; i < home.size(); ++i) {
             x[i] = minX(home[i]);
@@ -387,46 +427,110 @@ namespace Expanse::Arrange {
 
         std::vector<size_t> order(home.size());
         std::iota(order.begin(), order.end(), 0);
-        std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return minX(home[a]) < minX(home[b]); });
+        std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return std::pair{minX(home[a]), minY(home[a])} < std::pair{minX(home[b]), minY(home[b])}; });
         for (const size_t I : order) {
-            // Nearest: the horizontal gap, with rows that don't line up counting extra.
-            std::optional<size_t> best;
-            double                bestCost = 0;
-            for (size_t j = 0; j < home.size(); ++j) {
-                if (j == I || !(maxX(home[j]) <= minX(home[I]) + 0.5))
-                    continue;
-                const double COST = (minX(home[I]) - maxX(home[j])) + 2 * SPAN(minY(home[j]), maxY(home[j]), minY(home[I]), maxY(home[I]));
-                if (!best || COST < bestCost) {
-                    best     = j;
-                    bestCost = COST;
-                }
-            }
-            if (best)
-                x[I] = x[*best] + sizes[*best].x + (minX(home[I]) - maxX(home[*best]));
+            if (const auto A = anchor(I, home))
+                x[I] = A->edge ? x[A->other] + minX(home[I]) - minX(home[A->other]) : x[A->other] + sizes[A->other].x + minX(home[I]) - maxX(home[A->other]);
         }
 
+        std::vector<CBox> flipped;
+        for (const auto& box : home)
+            flipped.push_back(transposed(box));
         std::iota(order.begin(), order.end(), 0);
-        std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return minY(home[a]) < minY(home[b]); });
+        std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return std::pair{minY(home[a]), minX(home[a])} < std::pair{minY(home[b]), minX(home[b])}; });
         for (const size_t I : order) {
-            std::optional<size_t> best;
-            double                bestCost = 0;
-            for (size_t j = 0; j < home.size(); ++j) {
-                if (j == I || !(maxY(home[j]) <= minY(home[I]) + 0.5))
-                    continue;
-                const double COST = (minY(home[I]) - maxY(home[j])) + 2 * SPAN(minX(home[j]), maxX(home[j]), minX(home[I]), maxX(home[I]));
-                if (!best || COST < bestCost) {
-                    best     = j;
-                    bestCost = COST;
-                }
-            }
-            if (best)
-                y[I] = y[*best] + sizes[*best].y + (minY(home[I]) - maxY(home[*best]));
+            if (const auto A = anchor(I, flipped))
+                y[I] = A->edge ? y[A->other] + minY(home[I]) - minY(home[A->other]) : y[A->other] + sizes[A->other].y + minY(home[I]) - maxY(home[A->other]);
         }
 
-        std::vector<Vector2D> out(home.size());
+        std::vector<Vector2D> origins;
         for (size_t i = 0; i < home.size(); ++i)
-            out[i] = {x[i], y[i]};
-        return out;
+            origins.emplace_back(x[i], y[i]);
+        return origins;
+    }
+
+    Vector2D homeSpot(size_t i, const std::vector<CBox>& here, const std::vector<CBox>& home) {
+        // Along x; for y the same, transposed. Of equally near windows (two
+        // stacked with their right edges lined up here, say), the one that
+        // puts it furthest along: clear of all of them at home, where they may
+        // differ in size.
+        const auto ALONG = [i](const std::vector<CBox>& here, const std::vector<CBox>& home) {
+            const CBox&                R = here[i];
+            std::optional<double>      furthest;
+            for (const auto& a : anchors(i, here)) {
+                const double SPOT = a.edge ? minX(home[a.other]) + minX(R) - minX(here[a.other]) : maxX(home[a.other]) + minX(R) - maxX(here[a.other]);
+                furthest          = std::max(furthest.value_or(SPOT), SPOT);
+            }
+            return std::round(furthest.value_or(minX(R)));
+        };
+        std::vector<CBox> hereFlipped, homeFlipped;
+        for (const auto& box : here)
+            hereFlipped.push_back(transposed(box));
+        for (const auto& box : home)
+            homeFlipped.push_back(transposed(box));
+        return {ALONG(here, home), ALONG(hereFlipped, homeFlipped)};
+    }
+
+    std::set<size_t> rehome(const std::vector<CBox>& here, std::vector<std::optional<Vector2D>>& homes, const std::vector<Vector2D>& homeSizes,
+                            const std::vector<Vector2D>& sizes) {
+        const size_t N         = here.size();
+        const auto   HOMEBOXES = [&] {
+            std::vector<CBox> home;
+            for (size_t j = 0; j < N; ++j)
+                home.push_back({homes[j].value_or(here[j].pos()), homeSizes[j]});
+            return home;
+        };
+        std::vector<CBox> hereFlipped;
+        for (const auto& box : here)
+            hereFlipped.push_back(transposed(box));
+
+        std::set<size_t> rehomed;
+        // A new home spot can change which windows another one is anchored
+        // to, so again until nothing changes (a few rounds at most).
+        for (int round = 0; round < 4; ++round) {
+            const auto       HOME = HOMEBOXES();
+            std::set<size_t> strays;
+            if (round == 0)
+                for (size_t j = 0; j < N; ++j)
+                    if (!homes[j])
+                        strays.insert(j);
+            for (size_t i = 0; i < N; ++i) {
+                for (size_t j = i + 1; j < N; ++j) {
+                    if (!intersects(inset(HOME[i], 0.5, 0.5), HOME[j]) || intersects(inset(here[i], 0.5, 0.5), here[j]))
+                        continue;
+                    // The one below (or, side by side, on the right) is the one out of place.
+                    const bool STACKED = maxY(here[i]) <= minY(here[j]) + 0.5 || maxY(here[j]) <= minY(here[i]) + 0.5;
+                    strays.insert(STACKED ? (minY(here[j]) > minY(here[i]) ? j : i) : (minX(here[j]) > minX(here[i]) ? j : i));
+                }
+            }
+            const auto        DERIVED = derive(HOME, sizes);
+            std::vector<CBox> homeFlipped;
+            for (const auto& box : HOME)
+                homeFlipped.push_back(transposed(box));
+            for (size_t i = 0; i < N; ++i)
+                if (DERIVED[i].distance(here[i].pos()) >= 1 || anchor(i, HOME) != anchor(i, here) || anchor(i, homeFlipped) != anchor(i, hereFlipped))
+                    strays.insert(i);
+
+            // Left to right and top to bottom, so a stray next to another
+            // stray measures from its new spot; twice, for one anchored to a
+            // stray further on.
+            std::vector<size_t> order(strays.begin(), strays.end());
+            std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return std::pair{minX(here[a]), minY(here[a])} < std::pair{minX(here[b]), minY(here[b])}; });
+            bool changed = false;
+            for (int pass = 0; pass < 2; ++pass) {
+                for (const size_t I : order) {
+                    const Vector2D SPOT = homeSpot(I, here, HOMEBOXES());
+                    if (!homes[I] || homes[I]->distance(SPOT) >= 1) {
+                        homes[I] = SPOT;
+                        rehomed.insert(I);
+                        changed = true;
+                    }
+                }
+            }
+            if (!changed)
+                break;
+        }
+        return rehomed;
     }
 
     std::optional<Vector2D> freeSpot(const Vector2D& size, const std::vector<CBox>& others, const std::optional<CBox>& anchor, const Vector2D& target, const CBox& visible,

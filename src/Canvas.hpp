@@ -43,6 +43,8 @@ namespace Expanse {
     std::optional<eDirection> parseDirection(const std::string& text);
     std::string               appName(const PHLWINDOW& window); // "org.gnome.Nautilus" → "Nautilus"
     bool                      sizesItself(const PHLWINDOW& window); // a VM's or remote screen's window: never resized
+    bool                      isDialog(const PHLWINDOW& window);    // a dialog, a password prompt, or pinned above the rest
+    std::string               logName(const PHLWINDOW& window);     // app[address], for the log: never its title
 
     // The bottom-right overview on the canvas: every window as a block, the
     // view as an outline, the zoom. Screen boxes are global logical.
@@ -125,6 +127,8 @@ namespace Expanse {
         bool                   autoCentre() const;
         void                   setWallpaper(std::optional<bool> on); // nullopt: the config value
         bool                   wallpaper() const;
+        void                   setNames(std::optional<bool> on); // nullopt: the config's default
+        bool                   names() const;
         void                   setHotCorner(std::optional<std::string> corner);
         void                   restoreOffscreen(); // every window back in view
 
@@ -205,6 +209,8 @@ namespace Expanse {
             CBox                    box;
             Vector2D                preferred;
             Vector2D                home;      // absolute canvas
+            bool                    homeKnown = true; // not for one opened on a smaller screen, until fitting gives it one
+            Vector2D                fitPush;   // how far the last fit pushed it to clear an overlap
             std::optional<Vector2D> lastSized; // what the canvas last resized it to
             PHLWORKSPACEREF         workspace; // whose canvas `home` is on
         };
@@ -223,6 +229,9 @@ namespace Expanse {
         SCamera                zoomedAround(const SCamera& camera, double scale, const Vector2D& anchor) const;
         CBox                   viewCentre() const;
         bool                   fullyVisible(PHLWINDOW window) const;
+        bool                   showsEnough(const PHLWINDOW& window); // on its screen, enough of it to work in
+        bool                   pinnedAt(const Vector2D& pos) const;  // a window pinned above the canvas is there
+        void                   makeWay(const PHLWINDOW& dialog);
         PHLWINDOW              nearest(eDirection direction, const CBox& from, PHLWINDOW exclude) const;
         std::optional<SSpacesBar> spacesBarBeside(const PHLMONITOR& monitor, const PHLWORKSPACE& current, const SMinimap& map) const;
         bool                   interruptDive(); // input during a dive leaves you on the canvas, as on the Mac
@@ -255,10 +264,17 @@ namespace Expanse {
         bool                   isDerived(const PHLWORKSPACE& workspace) const;
         void                   noteSizes();
         void                   updateHome();
-        void                   noteUserMove(const PHLWINDOW& window, const Vector2D& delta);
+        void                   noteUserMove(const PHLWINDOW& window);
         void                   resizeWindow(const PHLWINDOW& window, const Vector2D& size);
         void                   fitToScreen(const PHLWINDOW& window);
-        void                   fitLayoutToScreen(double margin, bool tidy);
+        // Canvas spots (real + scrolled) to fit from, noted before a scroll changed.
+        using Spots = std::vector<std::pair<PHLWINDOW, Vector2D>>;
+        void                   fitLayoutToScreen(bool tidy, const std::optional<std::vector<PHLWINDOW>>& rederiving = std::nullopt, const Spots* spots = nullptr);
+        Vector2D               homeSize(const STracked& entry, const PHLWINDOW& window) const;
+        Vector2D               fittedSize(const STracked& entry, const PHLWINDOW& window, const Vector2D& screen) const;
+        std::vector<CBox>      fittedFrames(const std::vector<PHLWINDOW>& windows, const Spots& spots);
+        Spots                  canvasSpots(const std::vector<PHLWINDOW>& windows) const;
+        void                   rehomeStrays(const std::vector<PHLWINDOW>& windows, const Spots& spots);
         void                   relayout();       // the focused monitor's workspace (or m_layoutMonitor's)
         void                   relayoutAll();    // every monitor's
         void                   relayoutOn(const PHLMONITOR& monitor);
@@ -290,8 +306,14 @@ namespace Expanse {
         bool                   m_light        = false;
         std::chrono::steady_clock::time_point m_cameraChangedAt;
         bool                   m_fromKeyboard = false; // the glide lands like Hyprland's movefocus
+        // You've put the view where you want it (panned at 100%): a window you
+        // can see that you click, or dive into, gets focus without the view
+        // moving to centre it. Over at the next glide, zoom or screen change.
+        bool                   m_viewPlaced = false;
+        PHLWINDOWREF           m_dialog; // opened during a glide: gone to once it lands
         bool                   m_autoCentre   = true;
         std::optional<bool>    m_wallpaper;
+        std::optional<bool>    m_names;
         SCamera                m_camera;
         SCamera                m_from;
         SCamera                m_to;
@@ -323,6 +345,10 @@ namespace Expanse {
         // can differ, and a workspace can move between them.
         std::unordered_map<std::string, CBox>        m_lastScreens;
         std::unordered_map<std::string, std::string> m_lastMonitors; // and the monitor it was on
+        // Per workspace, the screen size its layout was last fitted to, kept
+        // with the layout: at the next fit (or load), windows move only by
+        // however much the screen differs.
+        std::unordered_map<std::string, Vector2D>    m_fitted;
         PHLMONITORREF               m_layoutMonitor;   // fitting a monitor other than the focused one
         PHLWORKSPACEREF             m_layoutWorkspace; // placing on a workspace that isn't showing
 

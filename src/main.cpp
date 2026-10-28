@@ -22,6 +22,7 @@
 #include <lua.hpp>
 
 #include "Canvas.hpp"
+#include "Log.hpp"
 #include "HotCorner.hpp"
 #include "Mode.hpp"
 #include "Later.hpp"
@@ -119,7 +120,7 @@ static int luaHop(lua_State* L) {
 
 static constexpr const char* USAGE =
     "usage: hyprctl expanse [state | toggle | open | close | hop <left|right|up|down> | focus <app> | pick <x> <y> | space <name> | tidy | fit | zoom <scale> | "
-    "pan <dx> <dy> | select all | restore | pause [toggle] | resume | autocentre <on|off|toggle> | wallpaper <on|off|toggle|default> | "
+    "pan <dx> <dy> | select all | restore | pause [toggle] | resume | autocentre <on|off|toggle> | wallpaper <on|off|toggle|default> | names <on|off|toggle|default> | log | logging [on|off|toggle] | "
     "corner [off|all|bottom|top_left|top_right|bottom_left|bottom_right|default] | keys | screen [<w> <h>] | pinch <scale>... | perf [start [gpu]|stop]]\n";
 
 // The canvas's own keys (binds are in Omarchy's key guide), for the menu's Shortcuts.
@@ -239,6 +240,23 @@ static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
         g_canvas.resume();
     else if (verb == "keys")
         return KEYS;
+    else if (verb == "log")
+        // This run's lines (omarchy/expanse's bug report reads them).
+        return Expanse::Log::recent(1 << 20);
+    else if (verb == "logging") {
+        // Detailed Logging: every line to the log file too; saved.
+        std::string word;
+        words >> word;
+        if (word == "on" || word == "off")
+            Expanse::Log::setFile(word == "on");
+        else if (word == "toggle")
+            Expanse::Log::setFile(!Expanse::Log::fileOn());
+        else if (word.empty())
+            return std::format("{{\"on\":{},\"file\":\"{}\"}}\n", Expanse::Log::fileOn(), Expanse::Log::filePath());
+        else
+            return USAGE;
+        g_canvas.scheduleSave();
+    }
     else if (verb == "corner") {
         // Which corners zoom out, as the Mac's menu: saved, and over the config value until "default".
         std::string word;
@@ -262,6 +280,19 @@ static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
             g_canvas.setWallpaper(std::nullopt);
         else
             return USAGE;
+    } else if (verb == "names") {
+        // App names above the windows on the canvas; saved, as "wallpaper".
+        std::string word;
+        words >> word;
+        if (word == "on" || word == "off")
+            g_canvas.setNames(word == "on");
+        else if (word == "toggle")
+            g_canvas.setNames(!g_canvas.names());
+        else if (word == "default")
+            g_canvas.setNames(std::nullopt);
+        else
+            return USAGE;
+        Expanse::Render::prepareLabels();
     }
     else if (verb == "focus") {
         // The newest window whose app matches, as expanse://focus?app= on the
@@ -365,6 +396,8 @@ static void fail(const std::string& reason) {
     throw std::runtime_error("[expanse] " + reason);
 }
 
+static constexpr const char* VERSION = "0.5.0";
+
 APICALL EXPORT std::string PLUGIN_API_VERSION() {
     return HYPRLAND_API_VERSION;
 }
@@ -383,6 +416,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     HyprlandAPI::addConfigValueV2(PHANDLE,
                                   makeShared<Config::Values::CBoolValue>("plugin:expanse:wallpaper", "the desktop picture behind the canvas; off: a plain background",
                                                                          Config::BOOL{true}));
+    HyprlandAPI::addConfigValueV2(PHANDLE,
+                                  makeShared<Config::Values::CBoolValue>("plugin:expanse:window_names", "app names above the windows on the canvas", Config::BOOL{false}));
     HyprlandAPI::addConfigValueV2(PHANDLE,
                                   makeShared<Config::Values::CStringValue>("plugin:expanse:hot_corner",
                                                                            "rest the pointer here to zoom out: off, all, bottom, top_left, top_right, bottom_left or bottom_right",
@@ -479,10 +514,12 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         Expanse::Render::prepareLabels();
     });
 
-    return {"expanse", "Expanse: an infinite, zoomable canvas for your windows", "Matthew Salmon", "0.4.0"};
+    Expanse::Log::info("Expanse {} loaded", VERSION);
+    return {"expanse", "Expanse: an infinite, zoomable canvas for your windows", "Matthew Salmon", VERSION};
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
+    Expanse::Log::info("unloading: windows back where Hyprland had them");
     // Nothing of ours may run once the plugin is gone: no more events first
     // (putting windows back raises some), then nothing left waiting.
     g_listeners.clear();

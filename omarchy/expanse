@@ -13,6 +13,9 @@
 #   expanse here [on|off]       Expanse on this workspace, or its default back
 #   expanse everywhere [on|off] Expanse as the layout of every workspace
 #                               without one of its own
+#   expanse report   a bug report on the clipboard: versions, monitors,
+#                    settings and the log (no window titles)
+#   expanse log      the log, in less
 #
 # The Hyprland plugin is built from this checkout, the code you installed,
 # into ~/.local/share/expanse-omarchy; nothing is downloaded.
@@ -459,6 +462,82 @@ hot_corner_menu() {
   done
 }
 
+# --- Troubleshooting, as the Mac's: Detailed Logging, logs for a bug report,
+# the log, and a new issue. Window titles stay out: the log names windows by
+# app and address.
+
+ISSUES="https://github.com/invig/expanse-omarchy/issues/new"
+
+troubleshooting_menu() {
+  local logging picked
+  logging=$(hyprctl expanse logging 2>/dev/null | jq -r '.on // false')
+  picked=$(choose "Troubleshooting" \
+    $'\tDetailed Logging\t'"$(on_off "$logging")"', every line to a file' \
+    $'\tCopy Logs for a Bug Report\tReady to paste into a GitHub issue' \
+    $'\tShow Log' \
+    $'\tReport an Issue\tOn GitHub') || return
+  case $picked in
+    "Detailed Logging") hyprctl expanse logging toggle >/dev/null ;;
+    "Copy Logs for a Bug Report") cmd_report ;;
+    "Show Log") in_terminal "$SELF" log ;;
+    "Report an Issue") xdg-open "$ISSUES" >/dev/null 2>&1 & ;;
+  esac
+}
+
+# The log: the Detailed Logging file while it's being written, else this run's lines.
+current_log() {
+  local file
+  file=$(hyprctl expanse logging 2>/dev/null | jq -r 'select(.on) | .file')
+  if [[ -n $file && -s $file ]]; then
+    tail -c "${1:-45000}" "$file"
+  else
+    hyprctl expanse log 2>/dev/null | tail -c "${1:-45000}"
+  fi
+}
+
+cmd_log() {
+  current_log 2000000 | less +G
+}
+
+# What's needed to look into a problem, on the clipboard, ready to paste into a
+# GitHub issue (which takes 65,536 characters: the log keeps to 45,000).
+cmd_report() {
+  local now logging source modes workspace
+  now=$(state)
+  logging=$(hyprctl expanse logging 2>/dev/null | jq -r '.on // false')
+  if [[ $logging == true ]]; then
+    source="Detailed log"
+  else
+    source="Log for this run (Detailed Logging is off: turn it on for more)"
+  fi
+  modes="default $(omarchy-hyprland-workspace-layout-default 2>/dev/null)"
+  for workspace in $(hyprctl workspaces -j | jq -r '.[] | select(.id >= 1) | .id' | sort -n); do
+    modes+=", $workspace: $(omarchy-hyprland-workspace-layout-current "$workspace" 2>/dev/null)"
+  done
+  {
+    echo "### Expanse"
+    echo "- Expanse $(jq -r .version "$HERE/manifest.json") ($(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo "not a git checkout")), loaded from $(jq -r '.library // "nowhere: not running"' <<<"${now:-{}}")"
+    echo "- Hyprland $(hyprctl version -j | jq -r '.tag // .version'), Omarchy $(omarchy-version 2>/dev/null || echo "?"), $(uname -srm)"
+    echo "- Monitors: $(hyprctl monitors -j | jq -r '[.[] | "\(.name) \(.width)x\(.height) @\(.scale)"] | join("; ")')"
+    if [[ -n $now ]]; then
+      echo "- Settings: $(jq -r '"paused \(.paused), auto-centre \(.autoCentre), desktop picture \(.wallpaper), window names \(.names), hot corner \(.hotCorner)"' <<<"$now"), detailed logging $logging"
+    fi
+    echo "- Workspace layouts: $modes"
+    echo
+    echo "<details><summary>$source</summary>"
+    echo
+    echo '```'
+    current_log 45000
+    echo '```'
+    echo "</details>"
+  } | wl-copy >/dev/null 2>&1
+  if [[ $logging == true ]]; then
+    omarchy-notification-send -g  "Logs copied" "Paste them into a GitHub issue"
+  else
+    omarchy-notification-send -g  "Logs copied" "For more, turn on Detailed Logging and try again"
+  fi
+}
+
 cmd_menu() {
   local now
   now=$(state)
@@ -487,12 +566,14 @@ cmd_menu() {
       $'\tUse Expanse Here\tThis workspace as a canvas' \
       $'\tEvery Workspace\t'"$(on_off "$everywhere")" \
       $'\tHot Corner\t'"$corner" \
+      $'\tTroubleshooting' \
       $'\tShortcuts' \
       $'\tRemove Expanse') || exit 0
     case $picked in
       "Use Expanse Here") cmd_here on ;;
       "Every Workspace") cmd_everywhere "$([[ $everywhere == true ]] && echo off || echo on)" ;;
       "Hot Corner") hot_corner_menu ;;
+      "Troubleshooting") troubleshooting_menu ;;
       "Shortcuts") in_terminal hyprctl expanse keys ;;
       "Remove Expanse") in_terminal "$SELF" remove ;;
     esac
@@ -506,10 +587,12 @@ cmd_menu() {
     $'\tRestore All Windows\tEvery window back into view' \
     $'\tAuto-Centre\t'"$(on_off "$(jq -r .autoCentre <<<"$now")")" \
     $'\tDesktop Picture\t'"$(on_off "$(jq -r .wallpaper <<<"$now")")" \
+    $'\tWindow Names\t'"$(on_off "$(jq -r .names <<<"$now")")" \
     $'\t'"$([[ $paused == true ]] && echo Resume || echo Pause)"$'\tWindows back where Hyprland had them' \
     $'\tHot Corner\t'"$corner" \
     $'\tStop Using Expanse Here\tThis workspace back to tiling' \
     $'\tEvery Workspace\t'"$(on_off "$everywhere")" \
+    $'\tTroubleshooting' \
     $'\tShortcuts' \
     $'\tRemove Expanse') || exit 0
 
@@ -523,9 +606,11 @@ cmd_menu() {
     "Restore All Windows") hyprctl expanse restore >/dev/null ;;
     "Auto-Centre") hyprctl expanse autocentre toggle >/dev/null ;;
     "Desktop Picture") hyprctl expanse wallpaper toggle >/dev/null ;;
+    "Window Names") hyprctl expanse names toggle >/dev/null ;;
     "Pause") hyprctl expanse pause >/dev/null ;;
     "Resume") hyprctl expanse resume >/dev/null ;;
     "Hot Corner") hot_corner_menu ;;
+    "Troubleshooting") troubleshooting_menu ;;
     "Shortcuts") in_terminal hyprctl expanse keys ;;
     "Remove Expanse") in_terminal "$SELF" remove ;;
   esac
@@ -539,8 +624,10 @@ case ${1:-} in
   setup) cmd_setup ;;
   load) cmd_load ;;
   remove) cmd_remove ;;
+  report) cmd_report ;;
+  log) cmd_log ;;
   *)
-    sed -n '2,10p' "$SELF"
+    sed -n '2,19p' "$SELF"
     exit 1
     ;;
 esac

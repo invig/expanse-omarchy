@@ -1,6 +1,7 @@
 #define WLR_USE_UNSTABLE
 
 #include "Canvas.hpp"
+#include "Log.hpp"
 #include "Mode.hpp"
 #include "HotCorner.hpp"
 
@@ -76,12 +77,16 @@ namespace Expanse {
         if (!TARGET)
             return;
         const CBox BOX = goalBox(window);
+        Log::info("tracking {} on {}{}", logName(window), window->m_workspace ? window->m_workspace->m_name : "-", TARGET->floating() ? "" : " (arrived tiled)");
         m_originals.push_back({
             .window    = window,
             .wasTiled  = !TARGET->floating(),
             .box       = TARGET->position(),
             .preferred = BOX.size(),
             .home      = BOX.pos() + scrolledFor(window->m_workspace),
+            // Opened on a smaller screen, where it is says nothing of its home
+            // spot: fitting gives it one from its neighbours.
+            .homeKnown = !isDerived(window->m_workspace),
             .workspace = window->m_workspace,
         });
     }
@@ -106,6 +111,7 @@ namespace Expanse {
             }
         }
         rename(m_scrolled, renames);
+        rename(m_fitted, renames);
         rename(m_lastScreens, renames);
         rename(m_lastMonitors, renames);
 
@@ -166,8 +172,12 @@ namespace Expanse {
         layout.autoCentre = m_autoCentre;
         layout.hotCorner  = g_hotCorner.choice;
         layout.wallpaper  = m_wallpaper;
+        layout.names      = m_names;
+        layout.logging    = Log::fileOn();
         for (const auto& [name, offset] : m_scrolled)
             layout.scrolled.emplace_back(name, offset);
+        for (const auto& [name, size] : m_fitted)
+            layout.fitted.emplace_back(name, size);
 
         std::erase_if(m_originals, [](const STracked& o) { return !onCanvasWorkspace(o.window.lock()); });
         noteSizes();
@@ -243,6 +253,7 @@ namespace Expanse {
         if (auto* entry = tracked(window)) {
             entry->preferred = match->preferred.value_or(match->frame.size());
             entry->home      = match->home.value_or(match->frame.pos());
+            entry->homeKnown = true;
             entry->lastSized = match->frame.size();
         }
 
@@ -284,9 +295,13 @@ namespace Expanse {
 
         m_autoCentre       = LAYOUT->autoCentre;
         m_wallpaper        = LAYOUT->wallpaper;
+        m_names            = LAYOUT->names;
+        Log::setFile(LAYOUT->logging);
         g_hotCorner.choice = LAYOUT->hotCorner;
         for (const auto& [name, offset] : LAYOUT->scrolled)
             m_scrolled[name] = offset;
+        for (const auto& [name, size] : LAYOUT->fitted)
+            m_fitted[name] = size;
         m_pool = LAYOUT->windows;
 
         // A workspace can come back under another name: unloading reloads
@@ -302,6 +317,7 @@ namespace Expanse {
                 renames.emplace_back(IT->workspace, NOW);
         }
         rename(m_scrolled, renames);
+        rename(m_fitted, renames);
 
         // Windows still open (the plugin reloaded) find their exact entry
         // first, so two windows of one app don't swap spots; then the rest by
@@ -312,6 +328,17 @@ namespace Expanse {
                 rest.push_back(window);
         for (const auto& window : rest)
             placeFromSaved(window, false);
+
+        // Back where you last saw them, moved only if the screen differs from
+        // the one the layout was fitted to.
+        for (const auto& monitor : State::monitorState()->monitors()) {
+            if (!monitor || !monitor->m_enabled || !monitor->m_activeWorkspace || !Mode::isExpanse(monitor->m_activeWorkspace))
+                continue;
+            SOnMonitor here{*this, monitor};
+            const auto IT = m_fitted.find(monitor->m_activeWorkspace->m_name);
+            if (IT != m_fitted.end() && (std::abs(IT->second.x - usableArea().w) > 0.5 || std::abs(IT->second.y - usableArea().h) > 0.5))
+                fitLayoutToScreen(false, std::vector<PHLWINDOW>{});
+        }
     }
 
     void CCanvas::onWindowClose(PHLWINDOW window) {
@@ -332,6 +359,7 @@ namespace Expanse {
                                           .home      = IT->home,
                                       });
         m_originals.erase(IT);
+        Log::info("dropped {}: closed (its spot kept for when its app opens it again)", logName(window));
         scheduleSave();
     }
 
@@ -358,6 +386,7 @@ namespace Expanse {
     void CCanvas::pause() {
         if (m_paused)
             return;
+        Log::info("paused: windows back where they were before the canvas");
         stopSaving();
         saveNow();
         m_paused = true;
@@ -373,6 +402,7 @@ namespace Expanse {
     void CCanvas::resume() {
         if (!m_paused)
             return;
+        Log::info("resumed");
         m_paused = false;
         restoreCanvas();
     }
