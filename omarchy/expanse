@@ -36,11 +36,13 @@ loaded_from() {
   state | jq -r '.library // empty'
 }
 
-# What a build is for: this Hyprland and this checkout of Expanse.
+# What a build is for: this Hyprland, and Expanse's code as it is in this
+# checkout (an update that only changes its docs needs no rebuild).
 identity() {
   local hyprland expanse
   hyprland=$(hyprctl version -j 2>/dev/null | jq -r '.commit // empty')
-  expanse=$(git -C "$HERE" rev-parse HEAD 2>/dev/null || jq -r '.version' "$HERE/manifest.json")
+  expanse=$(git -C "$HERE" rev-parse HEAD:src HEAD:Makefile 2>/dev/null | tr '\n' ' ')
+  [[ -n $expanse ]] || expanse=$(jq -r '.version' "$HERE/manifest.json")
   echo "$hyprland $expanse"
 }
 
