@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.invig.expanse",
+  "name": "Expanse",
+  "version": "0.4.0",
+  "author": "Matthew Salmon",
+  "license": "MIT",
+  "description": "Every window gets its own place on one endless desktop. Zoom out to see them all; click one to glide straight to it.",
+  "kinds": [
+    "bar-widget",
+    "service"
+  ],
+  "entryPoints": {
+    "barWidget": "omarchy/BarWidget.qml",
+    "service": "omarchy/Service.qml"
+  },
+  "barWidget": {
+    "displayName": "Expanse",
+    "description": "Zoom out to every window, tidy up, restore a layout, and Expanse's settings.",
+    "category": "Desktop",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

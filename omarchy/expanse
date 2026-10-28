@@ -1,0 +1,278 @@
+#!/bin/bash
+# Expanse as an Omarchy plugin: the bar icon's menu, setting up the Hyprland
+# plugin, loading it at login, and taking it all out again.
+#
+#   expanse menu     the menu, from the bar icon (Omarchy's own menu)
+#   expanse setup    build the Hyprland plugin, load it, offer to add its keys
+#   expanse load     at login (the plugin's service): load it, rebuilt first
+#                    if Hyprland or Expanse changed since it was built
+#   expanse remove   unload it, offer to take its keys out, remove the plugin
+#
+# The Hyprland plugin is built from this checkout, the code you installed,
+# into ~/.local/share/expanse-omarchy; nothing is downloaded.
+
+set -uo pipefail
+
+ID="io.github.invig.expanse"
+HERE=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+SELF="$HERE/omarchy/expanse"
+BUILD="${XDG_DATA_HOME:-$HOME/.local/share}/expanse-omarchy"
+SO="$BUILD/expanse.so"
+STAMP="$BUILD/built-for"
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/expanse"
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprland.lua"
+KEYS="$HERE/examples/expanse.lua"
+KEYS_LINE="dofile(\"$KEYS\")"
+KEYS_NOTE="-- Expanse (its Omarchy plugin): keys and window rule"
+
+state() {
+  local out
+  out=$(hyprctl expanse 2>/dev/null)
+  [[ $out == "{"* ]] && printf '%s' "$out"
+}
+
+# Which file Expanse is running from, if it's running.
+loaded_from() {
+  state | jq -r '.library // empty'
+}
+
+# What a build is for: this Hyprland and this checkout of Expanse.
+identity() {
+  local hyprland expanse
+  hyprland=$(hyprctl version -j 2>/dev/null | jq -r '.commit // empty')
+  expanse=$(git -C "$HERE" rev-parse HEAD 2>/dev/null || jq -r '.version' "$HERE/manifest.json")
+  echo "$hyprland $expanse"
+}
+
+build() {
+  mkdir -p "$BUILD"
+  make -C "$HERE" OUT="$SO" || return 1
+  identity >"$STAMP"
+}
+
+# Running from this build, as built now. One loaded another way (hyprpm, a
+# build of your own) is left alone.
+load_build() {
+  local from
+  from=$(loaded_from)
+  [[ -n $from && $from != "$SO" ]] && return 0
+  if [[ $from == "$SO" ]]; then
+    [[ ${1:-} == fresh ]] || return 0
+    hyprctl plugin unload "$SO" >/dev/null
+  fi
+  hyprctl plugin load "$SO" >/dev/null
+}
+
+cmd_load() {
+  # Not set up yet: the bar icon offers setup.
+  [[ -f $SO ]] || exit 0
+  if [[ $(cat "$STAMP" 2>/dev/null) != "$(identity)" ]]; then
+    if ! build >"$BUILD/build.log" 2>&1; then
+      notify-send "Expanse" "Couldn't rebuild Expanse for this Hyprland: Set up Expanse, from its icon in the bar, tries again and shows why." 2>/dev/null
+      exit 1
+    fi
+    load_build fresh
+  else
+    load_build
+  fi
+}
+
+ask() {
+  if command -v gum >/dev/null; then
+    gum confirm "$1"
+  else
+    local answer
+    read -r -p "$1 [y/N] " answer
+    [[ $answer == [yY]* ]]
+  fi
+}
+
+cmd_setup() {
+  echo "Setting up Expanse."
+  echo
+  local missing=()
+  for tool in g++ make pkg-config jq; do
+    command -v "$tool" >/dev/null || missing+=("$tool")
+  done
+  if (( ${#missing[@]} )) || ! pkg-config --exists hyprland; then
+    echo "Building Expanse needs a compiler, make, pkg-config, jq and Hyprland's headers."
+    echo "Omarchy has them all; elsewhere, install base-devel, pkgconf, jq and hyprland, then set up again."
+    exit 1
+  fi
+
+  echo "Building it for Hyprland $(hyprctl version -j | jq -r '.tag // .version'), which takes a minute or two."
+  echo
+  if ! build; then
+    echo
+    echo "The build failed; the output is above. Please report it at"
+    echo "https://github.com/invig/expanse-omarchy/issues"
+    exit 1
+  fi
+  load_build fresh
+  if [[ -z $(state) ]]; then
+    echo
+    echo "Built, but Hyprland didn't load it. Try: hyprctl plugin load $SO"
+    exit 1
+  fi
+  echo
+  echo "Expanse is running."
+  echo
+
+  if grep -qxF "$KEYS_LINE" "$CONFIG" 2>/dev/null; then
+    echo "Its keys are already in $CONFIG."
+  else
+    cat <<EOF
+Expanse's keys come from one line at the end of $CONFIG, which loads
+$KEYS:
+
+  Alt + \`          zoom out to every window, and back
+  Super + arrows   hop to the nearest window that way (instead of Omarchy's focus keys)
+  Ctrl + Alt + C   centre the window you're in
+  Alt + Shift + \`  auto-centre on or off
+
+It also floats every window: Expanse lays windows out on its canvas instead
+of tiling them. The line:
+
+  $KEYS_LINE
+
+EOF
+    if ask "Add it to hyprland.lua?"; then
+      printf '\n%s\n%s\n' "$KEYS_NOTE" "$KEYS_LINE" >>"$CONFIG"
+      hyprctl reload >/dev/null
+      echo "Added."
+    else
+      echo "Left as it is. Add the line yourself whenever you like."
+    fi
+  fi
+  echo
+  echo "Rest the pointer in a bottom corner of the screen, or press Alt + \`, to zoom out."
+  echo "Expanse's icon in the bar has the rest. It loads at every login, and rebuilds"
+  echo "itself after Hyprland updates."
+}
+
+cmd_remove() {
+  echo "Removing Expanse. Your windows go back where Hyprland had them."
+  echo
+  ask "Remove Expanse?" || exit 130
+  [[ $(loaded_from) == "$SO" ]] && hyprctl plugin unload "$SO" >/dev/null
+  if grep -qxF "$KEYS_LINE" "$CONFIG" 2>/dev/null && ask "Take Expanse's line out of hyprland.lua?"; then
+    local kept
+    kept=$(grep -vxF -e "$KEYS_LINE" -e "$KEYS_NOTE" "$CONFIG")
+    printf '%s\n' "$kept" >"$CONFIG"
+    hyprctl reload >/dev/null
+  fi
+  rm -rf "$BUILD"
+  if [[ -d $STATE ]] && ask "Delete the layouts Expanse saved too ($STATE)?"; then
+    rm -rf "$STATE"
+  fi
+  omarchy-plugin-remove "$ID" --yes
+  echo
+  echo "Expanse is removed."
+}
+
+# --- The menu: Omarchy's own, with Expanse's rows. A row is
+# "<icon><TAB><label>[<TAB><subtext>]"; the label comes back.
+
+choose() {
+  omarchy-menu-select "$@" | cut -f1
+}
+
+on_off() {
+  [[ $1 == true ]] && echo "On" || echo "Off"
+}
+
+in_terminal() {
+  omarchy-launch-floating-terminal-with-presentation "$*"
+}
+
+restore_layout_menu() {
+  local snapshots names=("Newest" "Earlier" "Earliest") rows=()
+  snapshots=$(hyprctl expanse layout 2>/dev/null)
+  while IFS=$'\t' read -r index ago at; do
+    [[ -n $index && -n ${names[$index]:-} ]] && rows+=($'\U000F02DA\t'"${names[$index]}"$'\t'"${ago^}, $at")
+  done < <(jq -r '.[] | [.snapshot, .ago, .at] | @tsv' <<<"$snapshots" 2>/dev/null)
+  if (( ${#rows[@]} == 0 )); then
+    choose "Restore Layout" $'\U000F02DA\tNo earlier layouts yet\tOne is kept when the layout changes, 15 minutes apart' >/dev/null
+    return
+  fi
+  local picked
+  picked=$(choose "Restore Layout" "${rows[@]}") || return
+  for index in "${!names[@]}"; do
+    [[ ${names[$index]} == "$picked" ]] && hyprctl expanse layout "$index" >/dev/null
+  done
+}
+
+hot_corner_menu() {
+  local current names=(bottom all top_left top_right bottom_left bottom_right off)
+  local labels=("Bottom" "All" "Top Left" "Top Right" "Bottom Left" "Bottom Right" "Off")
+  current=$(state | jq -r '.hotCorner // empty')
+  local rows=()
+  for i in "${!names[@]}"; do
+    rows+=($'\t'"${labels[$i]}$([[ ${names[$i]} == "$current" ]] && printf '\tCurrent')")
+  done
+  local picked
+  picked=$(choose "Hot Corner" "${rows[@]}") || return
+  for i in "${!labels[@]}"; do
+    [[ ${labels[$i]} == "$picked" ]] && hyprctl expanse corner "${names[$i]}" >/dev/null
+  done
+}
+
+cmd_menu() {
+  local now
+  now=$(state)
+  if [[ -z $now ]]; then
+    local picked
+    picked=$(choose "Expanse" \
+      $'\tSet up Expanse\tBuild its Hyprland plugin, then add its keys' \
+      $'\tRemove Expanse') || exit 0
+    case $picked in
+      "Set up Expanse") in_terminal "$SELF" setup ;;
+      "Remove Expanse") in_terminal "$SELF" remove ;;
+    esac
+    exit 0
+  fi
+
+  local newest corner paused
+  newest=$(hyprctl expanse layout 2>/dev/null | jq -r '.[0].ago // "none yet"')
+  corner=$(jq -r '.hotCorner' <<<"$now" | sed 's/_/ /; s/\b\(.\)/\u\1/g')
+  paused=$(jq -r .paused <<<"$now")
+  local picked
+  picked=$(choose "Expanse" \
+    $'\tZoom Out' \
+    $'\tTidy Up' \
+    $'\U000F04FE\tCentre Current Window' \
+    $'\U000F02DA\tRestore Layout\t'"Newest: $newest" \
+    $'\tRestore All Windows\tEvery window back into view' \
+    $'\tAuto-Centre\t'"$(on_off "$(jq -r .autoCentre <<<"$now")")" \
+    $'\tDesktop Picture\t'"$(on_off "$(jq -r .wallpaper <<<"$now")")" \
+    $'\t'"$([[ $paused == true ]] && echo Resume || echo Pause)"$'\tWindows back where they were before the canvas' \
+    $'\tHot Corner\t'"$corner" \
+    $'\tShortcuts' \
+    $'\tRemove Expanse') || exit 0
+
+  case $picked in
+    "Zoom Out") hyprctl expanse toggle >/dev/null ;;
+    "Tidy Up") hyprctl expanse tidy >/dev/null ;;
+    "Centre Current Window") hyprctl expanse centre >/dev/null ;;
+    "Restore Layout") restore_layout_menu ;;
+    "Restore All Windows") hyprctl expanse restore >/dev/null ;;
+    "Auto-Centre") hyprctl expanse autocentre toggle >/dev/null ;;
+    "Desktop Picture") hyprctl expanse wallpaper toggle >/dev/null ;;
+    "Pause") hyprctl expanse pause >/dev/null ;;
+    "Resume") hyprctl expanse resume >/dev/null ;;
+    "Hot Corner") hot_corner_menu ;;
+    "Shortcuts") in_terminal hyprctl expanse keys ;;
+    "Remove Expanse") in_terminal "$SELF" remove ;;
+  esac
+}
+
+case ${1:-} in
+  menu) cmd_menu ;;
+  setup) cmd_setup ;;
+  load) cmd_load ;;
+  remove) cmd_remove ;;
+  *)
+    sed -n '2,10p' "$SELF"
+    exit 1
+    ;;
+esac

@@ -4,6 +4,8 @@
 #include "HotCorner.hpp"
 #include "Later.hpp"
 
+#include <dlfcn.h>
+
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/debug/log/Logger.hpp>
@@ -1384,6 +1386,13 @@ namespace Expanse {
         return nullptr;
     }
 
+    // The file this plugin was loaded from, so its Omarchy plugin can tell its
+    // own build from one loaded another way: hyprctl plugin list doesn't say.
+    static std::string library() {
+        Dl_info info;
+        return dladdr(reinterpret_cast<void*>(&library), &info) && info.dli_fname ? info.dli_fname : "";
+    }
+
     std::string CCanvas::stateJson() const {
         static constexpr const char* STATES[] = {"idle", "opening", "overview", "gliding"};
 
@@ -1411,11 +1420,11 @@ namespace Expanse {
         const auto MAP       = minimap();
         const auto HINT      = m_offscreenHint.lock();
         const auto SCROLLED  = scrolledFor(WORKSPACE);
-        return std::format(R"({{"state":"{}","paused":{},"workspace":"{}","scale":{:.3f},"origin":[{:.1f},{:.1f}],"scrolled":[{:.1f},{:.1f}],"autoCentre":{},"wallpaper":{},"hotCorner":"{}","hover":"{}","target":"{}","marquee":{},"minimap":{},"offscreenNotice":"{}","lastAnimation":"{}","glides":{},"windows":[{}],"spaces":[{}]}})",
+        return std::format(R"({{"state":"{}","paused":{},"workspace":"{}","scale":{:.3f},"origin":[{:.1f},{:.1f}],"scrolled":[{:.1f},{:.1f}],"autoCentre":{},"wallpaper":{},"hotCorner":"{}","hover":"{}","target":"{}","marquee":{},"minimap":{},"offscreenNotice":"{}","lastAnimation":"{}","glides":{},"library":"{}","windows":[{}],"spaces":[{}]}})",
                            STATES[m_state], m_paused, WORKSPACE ? jsonEscape(WORKSPACE->m_name) : "", m_camera.scale, m_camera.origin.x, m_camera.origin.y, SCROLLED.x,
                            SCROLLED.y, m_autoCentre, wallpaper(), jsonEscape(g_hotCorner.corner()), HOVER ? jsonEscape(HOVER->m_title) : "", TARGET ? jsonEscape(TARGET->m_title) : "",
                            MARQUEE ? std::format("[{:.1f},{:.1f},{:.1f},{:.1f}]", MARQUEE->x, MARQUEE->y, MARQUEE->w, MARQUEE->h) : "null",
-                           MAP ? std::format("[{:.0f},{:.0f},{:.0f},{:.0f}]", MAP->box.x, MAP->box.y, MAP->box.w, MAP->box.h) : "null", HINT ? jsonEscape(HINT->m_class) : "", m_lastAnimation, m_glides,
+                           MAP ? std::format("[{:.0f},{:.0f},{:.0f},{:.0f}]", MAP->box.x, MAP->box.y, MAP->box.w, MAP->box.h) : "null", HINT ? jsonEscape(HINT->m_class) : "", m_lastAnimation, m_glides, jsonEscape(library()),
                            windows, spaces) +
             "\n";
     }

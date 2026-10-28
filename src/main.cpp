@@ -443,7 +443,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         Expanse::Render::prepareLabels();
     });
 
-    return {"expanse", "Expanse: an infinite, zoomable canvas for your windows", "Matthew Salmon", "0.3.0"};
+    return {"expanse", "Expanse: an infinite, zoomable canvas for your windows", "Matthew Salmon", "0.4.0"};
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
