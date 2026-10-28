@@ -29,7 +29,9 @@ STATE="${XDG_STATE_HOME:-$HOME/.local/state}/expanse"
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprland.lua"
 KEYS="$HERE/examples/expanse.lua"
 KEYS_LINE="dofile(\"$KEYS\")"
-KEYS_NOTE="-- Expanse (its Omarchy plugin): keys and window rule"
+KEYS_NOTE="-- Expanse (its Omarchy plugin): its keys"
+# What the note said before Expanse was a layout, to take out too.
+OLD_NOTE="-- Expanse (its Omarchy plugin): keys and window rule"
 
 state() {
   local out
@@ -193,7 +195,7 @@ cmd_remove() {
   [[ $(loaded_from) == "$SO" ]] && hyprctl plugin unload "$SO" >/dev/null
   if grep -qxF "$KEYS_LINE" "$CONFIG" 2>/dev/null && ask "Take Expanse's line out of hyprland.lua?"; then
     local kept
-    kept=$(grep -vxF -e "$KEYS_LINE" -e "$KEYS_NOTE" "$CONFIG")
+    kept=$(grep -vxF -e "$KEYS_LINE" -e "$KEYS_NOTE" -e "$OLD_NOTE" "$CONFIG")
     printf '%s\n' "$kept" >"$CONFIG"
     hyprctl reload >/dev/null
   fi
@@ -256,10 +258,19 @@ switch_mode() {
   fi
   local apply="o.workspace_mode({ workspace = \"$workspace\", mode = \"$mode\" })"
   hyprctl eval "$apply" >/dev/null 2>&1 || return 1
-  if [[ $mode == "$(omarchy-hyprland-workspace-layout-default)" ]]; then
+  local default
+  default=$(omarchy-hyprland-workspace-layout-default)
+  if [[ $mode == "$default" ]]; then
     rm -f "$MODES/$workspace.lua"
   else
-    mkdir -p "$MODES" && printf '%s\n' "$apply" >"$MODES/$workspace.lua"
+    mkdir -p "$MODES"
+    {
+      # Floating keeps the tiled layout underneath, which from the config is
+      # the default's: with Expanse the default, tiling instead.
+      [[ $mode == floating && $default == expanse ]] &&
+        printf 'hl.workspace_rule({ workspace = "%s", layout = "dwindle" })\n' "$workspace"
+      printf '%s\n' "$apply"
+    } >"$MODES/$workspace.lua"
   fi
 }
 
