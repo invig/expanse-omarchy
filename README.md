@@ -1,139 +1,279 @@
-# Expanse for Hyprland
+<p align="center">
+  <img src="preview.jpg" alt="Expanse on Omarchy, zoomed out: every window on one canvas with its name above it, the one under the pointer ringed, and the workspaces bar and minimap in the bottom-right corner" width="900">
+</p>
 
-[Expanse](https://github.com/invig/expanse)'s infinite canvas as a Hyprland plugin: your windows live at fixed spots on one endless canvas, you zoom out to see all of them, and click one to glide to it at 100%.
+<p align="center">
+  <strong>Every window gets its own place on one endless desktop.</strong><br>
+  Zoom out to see them all. Click one to glide straight to it.
+</p>
 
-Built and tested on Omarchy (Hyprland 0.56.2, aarch64) in [Try Omarchy](https://github.com/omacom/try-omarchy).
+<p align="center">
+  <a href="#install"><strong>Install</strong></a> ·
+  <a href="#the-basics">How to use it</a> ·
+  <a href="#questions">Questions</a> ·
+  <a href="https://github.com/invig/expanse">Expanse for Mac</a>
+</p>
 
-![Zoomed out: every window on the canvas, the one under the pointer ringed; the workspaces bar and minimap bottom right](docs/overview.jpg)
+<p align="center">
+  <img alt="Omarchy 4" src="https://img.shields.io/badge/Omarchy-4-black">
+  <img alt="Hyprland 0.56+" src="https://img.shields.io/badge/Hyprland-0.56%2B-58e1ff">
+  <img alt="Free and open source, MIT" src="https://img.shields.io/badge/free-MIT-blue">
+</p>
 
-## Using it
+---
 
-| Input | What it does |
-| --- | --- |
-| <kbd>Alt</kbd> + <kbd>`</kbd>, <kbd>Alt</kbd> + pinch in, or rest the pointer in a bottom corner | Zoom out to every window, and back to where you were |
-| Click a window | Glide to it, centred at 100%, and use it |
-| <kbd>Super</kbd> + arrows | Glide to the nearest window in that direction; on the canvas, plain arrows |
-| Pinch, or <kbd>Super</kbd> + scroll | Zoom the canvas around the pointer |
-| Scroll, middle-drag, or <kbd>Space</kbd> + drag | Pan |
-| Scroll or pinch on the empty desktop | Start moving around the canvas from 100% |
-| Click the empty desktop | Zoom out to every window |
-| Drag a window | Move it; snaps to edges, a 20 px gap and the middle of the screen (hold <kbd>Super</kbd> to turn snapping off) |
-| Drag on empty canvas, <kbd>Shift</kbd>-click, <kbd>Super</kbd> + <kbd>A</kbd> | Select windows (outlined together, dashed, as on the Mac); drag any selected one to move the group |
-| <kbd>T</kbd> | Tidy up: each group of windows lined up and evenly spaced, where it is |
-| <kbd>0</kbd> · <kbd>1</kbd> · <kbd>-</kbd> · <kbd>=</kbd> | Fit everything · 100% · zoom out · zoom in |
-| <kbd>Return</kbd> · <kbd>Esc</kbd> | Dive into the highlighted window · clear the selection, then back to 100% |
-| Hover <kbd>×</kbd>, or <kbd>Super</kbd> + <kbd>W</kbd> | Close the hovered window, or every selected window at once |
-| <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>C</kbd> | Centre the window you're in |
-| <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>`</kbd> | Auto-centre on or off. Off: clicking a window that's partly on screen leaves the canvas where it is, for side-by-side work |
-| Click or drag on the minimap | Move the view there |
-| Click a tile on the workspaces bar | Go to that workspace's canvas, still zoomed out (at 100%, go there) |
-| Right-click on the canvas | Back to 100% |
+Expanse treats your screen as a view onto a much bigger canvas. Your windows stay where you put
+them on it; you move the view instead of the windows. Rest the pointer in a bottom corner of the
+screen to see everything at once, then click a window to fly to it, ready to use.
 
-At 100%, clicking a window that isn't fully on screen centres it, unless you were already working in it; typing as it glides goes on into it, as on the Mac. A two-finger pan on a touchpad coasts on after your fingers lift. On the canvas the pointer is an arrow, an open hand while <kbd>Space</kbd> is held and a closed one while panning. Diving into a window, the canvas stays drawn (names, minimap) until you're there; a click, scroll or pinch meanwhile stops it, still on the canvas. Toggles (auto-centre, pause) say so in a short message near the bottom of the screen.
+It's [Expanse for Mac](https://github.com/invig/expanse) for Omarchy, as a Hyprland plugin.
 
-The canvas is remembered in `~/.local/state/expanse/layout.json` (window titles only as a hash): reloading the plugin brings it back exactly, and a window an app opens again, after a restart too, returns to its spot. Unloading the plugin or pausing it puts every window back where it was before the canvas, tiled ones back into their layout; resuming brings the canvas back.
+- **See everything at once.** Every window, live, laid out the way you arranged it.
+- **Move around by direction.** <kbd>Super</kbd> + arrow keys hop to the next window to the
+  left, right, above or below.
+- **Arrange like a design tool.** Drag windows around; they snap into neat, even gaps. New
+  windows open beside the one they came from.
+- **A canvas for every workspace.** Each workspace keeps its own layout, and each monitor zooms
+  out on its own.
+- **At home on a laptop or a big display.** On a smaller screen the layout tightens up, and
+  plugging back in puts it back exactly.
+- **Easy to leave.** Pause it or remove it and every window goes straight back to where Hyprland
+  had it, tiled ones back into their layout.
 
-**Tidy Up** (<kbd>T</kbd> zoomed out, or the menu) tidies each group of windows where it is: overlaps pushed apart, edges within 60 px of lining up lined up, gaps closed to 20 px. A group only moves, as a whole, when another has grown into its space. **Restore Layout** puts this workspace's windows back where an earlier layout had them, fitted to this screen: a snapshot of the layout is kept when it has changed and the newest is 15 minutes old, the newest three of them, and the layout a restore replaces becomes one itself, so a restore can be undone (`hyprctl expanse layout` lists them, `layout 0` restores the newest).
+## Install
 
-The canvas follows you between screens: it keeps a home layout at the sizes you chose. On a smaller screen windows shrink to fit and the layout tightens, each window keeping its gap to its neighbours; back on the big screen the layout returns exactly. When a monitor changes size, the window you were in goes in the middle of it, as on the Mac (a workspace that lands on another monitor keeps its windows' places instead, see below), and a window too big for the screen shrinks to fit as you go to it. Apps that size in steps (a terminal to whole character cells) come within 32 px of the size asked for, and that counts as the size you chose. Windows of VMs and remote desktops (virt-manager, GNOME Boxes, VirtualBox, VMware, QEMU, Remmina, Moonlight, FreeRDP, VNC viewers and the like) size themselves to match the screen they show, and are never resized.
+On Omarchy 4:
 
-Every workspace has a canvas of its own. As on the Mac, the minimap and the workspaces bar are on the desktop at 100% too, under your windows, and a click on a tile there goes to that workspace. Zoomed out, the workspaces bar beside the minimap (Expanse's Spaces bar) shows each workspace on the monitor as its desktop picture with a small map of its windows around it, the one you're on outlined; it's hidden while there's only one. Tiles are named as Omarchy's bar names them: with its workspaces 1-10 per monitor, 47 on the fifth monitor is "Workspace 7", the one <kbd>Super</kbd> + <kbd>7</kbd> goes to there. Going to another workspace with the canvas up, from the bar or a workspace bind like <kbd>Super</kbd> + <kbd>2</kbd>, brings the canvas along, zoomed out, so you can pick a window there; the one you left settles where leaving it would have taken you.
-
-New windows open beside the window they came from (the app's front window in view, else the window in front), instead of on top of it: every spot along its edges is tried, right, below, left, then above, before anywhere further out; if that spot is off screen, the canvas glides there. Several opening at once get one glide, to the one in focus among them (else the newest), once they've all arrived. A new tab in a group (Hyprland's tabbed windows) stays in the group's spot. A window back from last time goes back to its spot: an app's first window, or several opening together (a browser bringing its session back), since apps here seldom reopen their windows themselves; a window opened while others of its app are open is new, so a second terminal opens beside the first, not where an old one was. A window opened on a workspace that isn't showing gets free space on that workspace's canvas; one that opens mid-glide, or elsewhere while you're zoomed out, is placed once the canvas is back at 100%. Dialogs keep the spot their app gives them. An open menu isn't drawn on the canvas (on the Mac it closes as the canvas takes the keyboard); back at 100% it's still there.
-
-With several monitors, each shows its workspace's canvas, with its own minimap and workspaces bar, and zooms out on its own. A canvas reaches past its monitor's edges, over its neighbours', but a window parked there is neither drawn on the neighbour nor clickable there; keyboard focus still reaches it and centres it on its own monitor. Each workspace remembers the screen it was laid out for, so following you between screens works per monitor, and a workspace that moves to another monitor (when one is unplugged, say) keeps its windows where they were on the screen. Workspaces Hyprland or Omarchy renames as monitors come and go (Omarchy renumbers a monitor's workspaces into its block) keep their canvas, while the plugin is loaded and across a reload. Expanse on the Mac manages one display.
-
-The keys after the first three work on the canvas (zoomed out, or after scrolling on the desktop). <kbd>Super</kbd> stands in for the Mac's <kbd>⌘</kbd> and <kbd>Ctrl</kbd>, so <kbd>Super</kbd> + <kbd>W</kbd> on the canvas closes the hovered window instead of the focused one.
-
-The nearest window that way is the one Expanse on the Mac picks: a window sharing the row (or column) wins, nearest first; failing that, the closest within ~35° of straight that way. A hop pressed mid-glide hops on from the window the glide is heading to.
-
-<kbd>Super</kbd> + arrows take over from Omarchy's focus keys (Hyprland's `movefocus`), which do the same job on a canvas less well: they pick by angle between centres, never centre the window, and can't chain. Hyprland fires every bind on a key, so the example config unbinds those four first. With auto-centre off, a hop to a window that's already on screen focuses it where it is. Like `movefocus`, a hop lands with the pointer on the window (unless `cursor:no_warps`), so focus that follows the mouse stays put; a click-centre leaves the pointer where you clicked. <kbd>Ctrl</kbd> + arrows stay with apps for word-jump.
-
-Focus moved from the keyboard (Alt-Tab, other binds) also centres a window that isn't fully on screen, once focus settles: it often bounces between windows for a moment, so as on the Mac the canvas goes where it lands 120 ms later. With auto-centre off the canvas stays put, and for a window all but off screen a message says where it went. Focus that follows the mouse never moves the canvas.
-
-A full-screen (or maximised) window sits outside the canvas, as a full-screen app does on the Mac: zooming out takes it out of full screen, back to its spot among the others. Leave without picking a window, or pick it, and it goes back to full screen; pick another and it stays where it is on the canvas. A window coming back from full screen gets the view, wherever it was on the canvas.
-
-## How it works
-
-- **Camera.** A camera (origin + scale) maps the canvas to the monitor. Canvas coordinates are the windows' real positions, so at 100% the camera changes nothing and Hyprland draws everything itself.
-- **At 100%, windows are real.** Every window on the canvas workspace floats where the canvas puts it, off-screen included. Zooming out floats tiled windows where they are. Input, focus, popups and X11 apps all stay native.
-- **Zoomed out, windows are drawn through the camera.** No function hooks: Hyprland's only work on x86_64. At the start of each frame the plugin hides the canvas windows from Hyprland's own pass. After Hyprland's windows, it draws each one where the camera puts it, by giving it that box as its current (animated) geometry until the frame is drawn, the way Hyprland draws a window mid-animation, then restores it. Underneath is the desktop picture as it is, as on the Mac (or a plain background, in the theme's light or dark); the bar stays on top. A window closed on the canvas just goes, rather than fading out at its real size. Pointer and keys go to the canvas, not to apps.
-- **On the canvas, windows are arranged for real.** Dragging, snapping and tidying move the real windows (still drawn through the camera), so there's nothing to reconcile when you leave. The snapping, tidy-up and placement rules are Expanse's, ported line for line.
-- **Drawn as Expanse draws them.** Zoomed out, every window has Expanse's soft shadow, in canvas units so it shrinks with the window, and its name just above it. Hyprland lays its decorations out for a window's real box, so the windows are drawn without them and each gets its theme border, in its colours, where the camera puts it; during a glide too.
-- **Frames.** Hyprland draws a monitor only when something on it has changed. While the camera moves (a glide, a zoom, a pan coasting), each frame asks for the next while it's being drawn, so motion runs at the display's refresh rate; asked for any earlier, Hyprland drops the request. Text is never made mid-motion: a texture made while a frame is on the GPU waits for that frame to finish. Window names are made ahead, a few at a time while nothing moves (as windows open, and after the canvas closes), and kept while they fit; while the camera moves a name keeps the text it has (cropped to its window). The zoom under the minimap is set from digits made once. Only windows on the monitor are drawn.
-- **Gliding** animates the camera (geometric zoom, straight-line pan of the view's centre), then moves every real window once so the camera is back at 100%, and focuses the picked window. A hop at 100% is the same glide without the zoom: for 0.3 s every window is drawn through the camera.
-
-## Build and load
-
-You need Hyprland's headers (`hyprland` on Arch and Omarchy ships them), `base-devel` and `pkg-config`.
-
-```sh
-git clone https://github.com/invig/expanse-omarchy
-cd expanse-omarchy
-make
-hyprctl plugin load "$PWD/expanse.so"
+```bash
+omarchy plugin add https://github.com/invig/expanse-omarchy --enable
 ```
 
-To load it at login, add to `~/.config/hypr/hyprland.lua`:
+Expanse's icon appears in the bar. Click it and pick **Set up Expanse**. That builds Expanse's
+Hyprland plugin from the code you just added, which takes a minute or two, then asks before
+adding the one line to `~/.config/hypr/hyprland.lua` that gives Expanse its keys. From then on
+it loads at every login, and rebuilds itself after Hyprland updates.
+
+Nothing else is downloaded, and nothing needs `sudo`: Omarchy already has the compiler and
+Hyprland's headers.
+
+## The basics
+
+| Do this | To |
+|---|---|
+| Rest the pointer in a bottom corner, or press <kbd>Alt</kbd> + <kbd>`</kbd> | Zoom out to every window (do it again to go back) |
+| Click a window | Glide to it and start using it |
+| <kbd>Super</kbd> + <kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd> | Hop to the next window in that direction |
+| Pinch, or scroll with two fingers | Zoom and move around the canvas |
+| Drag a window while zoomed out | Move it; it snaps into place |
+| <kbd>T</kbd> | Tidy up: each group of windows lined up and evenly spaced, where it is |
+| <kbd>Esc</kbd> | Back to 100% |
+
+<details>
+<summary><strong>All shortcuts</strong></summary>
+
+| Do this | To |
+|---|---|
+| <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>C</kbd> | Centre the window you're in |
+| <kbd>Super</kbd> + scroll | Zoom around the pointer |
+| <kbd>Space</kbd> + drag, or middle-drag | Move around the canvas |
+| <kbd>Alt</kbd> + pinch in | Zoom out to every window, from anywhere |
+| Click empty desktop | Zoom out to every window |
+| Scroll or pinch on empty desktop | Start moving around the canvas from 100% |
+| Drag on empty canvas, <kbd>Shift</kbd>-click, or <kbd>Super</kbd> + <kbd>A</kbd> | Select windows, then drag any of them to move the group |
+| Hold <kbd>Super</kbd> while dragging | Move without snapping |
+| <kbd>0</kbd> · <kbd>1</kbd> · <kbd>-</kbd> · <kbd>=</kbd> | Fit everything · 100% · zoom out · zoom in |
+| Arrow keys · <kbd>Return</kbd> | Move the highlight · dive into the highlighted window |
+| Hover <kbd>×</kbd>, or <kbd>Super</kbd> + <kbd>W</kbd> | Close the window, or every selected window |
+| Click the minimap | Move the view there |
+| Right-click | Back to 100% |
+| <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>`</kbd> | Turn auto-centring on or off (off suits side-by-side work) |
+
+</details>
+
+**Workspaces** each have a canvas of their own. The workspaces bar next to the minimap, at the
+bottom of the screen, shows them; click one to go there, or use Omarchy's workspace keys as usual.
+
+**Full-screen windows** step out of full screen while you're zoomed out, back to their place among
+the others, and go back to full screen when you return to them.
+
+**The bar icon** has the rest: Tidy Up, Centre Current Window, Restore Layout, Restore All
+Windows, auto-centring, the desktop picture, Pause, which corners to use, and the shortcuts.
+Right-click it to zoom out.
+
+## Questions
+
+<details>
+<summary><strong>The corner or <kbd>Super</kbd> + arrows do nothing</strong></summary>
+
+Click Expanse's icon in the bar. If it offers **Set up Expanse**, Expanse isn't running yet: pick
+it. If setup ran but you said no to adding its line to `hyprland.lua`, add this to the end of
+that file:
 
 ```lua
-hl.plugin.load("/path/to/expanse-omarchy/expanse.so")
-dofile("/path/to/expanse-omarchy/examples/expanse.lua")
+dofile(os.getenv("HOME") .. "/.config/omarchy/plugins/io.github.invig.expanse/examples/expanse.lua")
 ```
 
-Or with `hyprpm` (on Omarchy, `sudo pacman -S hyprpm` first): it builds the plugin against the headers of the Hyprland you're running and loads it.
+The corners that zoom out are the bottom two (Omarchy's menu lives top left). Pick others from
+the bar icon › **Hot Corner**.
 
-```sh
+</details>
+
+<details>
+<summary><strong>My windows ended up somewhere odd</strong></summary>
+
+The bar icon › **Restore Layout** puts them back the way they were earlier. Expanse keeps your
+last three layouts, saved at least 15 minutes apart, and a restore can be undone too. **Tidy Up**
+neatens things where they are. As a last resort, **Restore All Windows** brings every window
+into view.
+
+</details>
+
+<details>
+<summary><strong>It stopped working after an update</strong></summary>
+
+Hyprland plugins are built for one exact Hyprland, so Expanse rebuilds itself at the next login
+after Hyprland changes. If that build fails, a notification says so, and **Set up Expanse** in
+the bar icon's menu runs it again where you can see why. Please
+[open an issue](https://github.com/invig/expanse-omarchy/issues) with what it shows.
+
+</details>
+
+<details>
+<summary><strong>What does it keep, and what does it send?</strong></summary>
+
+Nothing is sent anywhere: Expanse makes no network requests. Its build lives in
+`~/.local/share/expanse-omarchy/`, and the only other files it writes are its layouts in
+`~/.local/state/expanse/`: window positions and sizes, app names, and a scrambled fingerprint
+(a hash) of each window's title, which recognises the window without storing the title.
+
+</details>
+
+<details>
+<summary><strong>What can't it do?</strong></summary>
+
+- **No typing while zoomed out**, as on the Mac: zoomed out, keys move around the canvas. Click a
+  window, or press <kbd>Return</kbd>, to use it.
+- **No smart zoom.** The Mac's two-finger double-tap has no equivalent on Linux touchpads.
+- **Hyprland 0.56 or later only**, with a Lua config, as Omarchy 4 has. It has been tested on
+  Omarchy on ARM, in a virtual machine;
+  [open an issue](https://github.com/invig/expanse-omarchy/issues) if anything misbehaves.
+
+</details>
+
+<details>
+<summary><strong>How is it different from Expanse for Mac?</strong></summary>
+
+- <kbd>Super</kbd> stands in for <kbd>⌘</kbd> and <kbd>⌃</kbd>, and <kbd>Alt</kbd> for <kbd>⌥</kbd>.
+- Every workspace has its own canvas, and every monitor its own view; the Mac uses one display.
+- An app you open again goes straight back to where its window was. On the Mac that waits for a
+  restart, since Mac apps hide and minimise windows to bring them back later.
+- Settings live in the bar icon's menu, and in Hyprland's config for the defaults.
+
+</details>
+
+<details>
+<summary><strong>How do I uninstall it?</strong></summary>
+
+Click Expanse's icon in the bar and pick **Remove Expanse**. Your windows go back where Hyprland
+had them, and it asks before taking its line out of `hyprland.lua` and deleting its saved
+layouts. Or by hand:
+
+```bash
+omarchy plugin remove io.github.invig.expanse
+rm -rf ~/.local/share/expanse-omarchy ~/.local/state/expanse
+```
+
+then delete the Expanse line at the end of `~/.config/hypr/hyprland.lua` and log out and back in.
+
+</details>
+
+## For tinkerers
+
+<details>
+<summary><strong>Scripting with <code>hyprctl expanse</code></strong></summary>
+
+```bash
+hyprctl expanse                   # the canvas, as JSON
+hyprctl expanse toggle            # zoom out / back
+hyprctl expanse tidy
+hyprctl expanse hop left          # left | right | up | down
+hyprctl expanse centre            # the window you're in, to the middle
+hyprctl expanse focus firefox     # an app's window (or address:0x… from hyprctl clients)
+hyprctl expanse space 2           # a workspace's canvas, zoomed out
+hyprctl expanse layout            # the saved layouts; layout 0 restores the newest (1, 2: older)
+hyprctl expanse pause             # windows back to Hyprland's layout
+hyprctl expanse resume
+```
+
+Also `open`, `close`, `fit`, `zoom <scale>`, `pan <dx> <dy>`, `select all`, `restore`,
+`autocentre <on|off|toggle>`, `wallpaper <on|off|toggle|default>`, `corner [<corner>|default]` and
+`keys`. In Lua, `hl.plugin.expanse.overview()`, `hop("left")`, `tidy()`, `centre()`,
+`restore_layout(0)`, `auto_centre()`, `pause()` and `restore()` return actions for `hl.bind`.
+
+</details>
+
+<details>
+<summary><strong>Settings in Hyprland's config</strong></summary>
+
+```lua
+hl.config({ plugin = { expanse = { hot_corner = "all", wallpaper = false } } })
+```
+
+`hot_corner` is `bottom` (the default), `all`, `top_left`, `top_right`, `bottom_left`,
+`bottom_right` or `off`; `wallpaper = false` puts the canvas on a plain background. These are
+defaults: a choice made from the bar icon wins until you pick the default again
+(`hyprctl expanse corner default`, `wallpaper default`). The keys are in
+[examples/expanse.lua](examples/expanse.lua); copy it and load your copy instead to change them.
+
+</details>
+
+<details>
+<summary><strong>Without Omarchy's plugin system</strong></summary>
+
+With `hyprpm`, which builds against the Hyprland you're running:
+
+```bash
 hyprpm update
 hyprpm add https://github.com/invig/expanse-omarchy
 hyprpm enable expanse
 hyprpm reload -n
 ```
 
-Then load it at login with `hyprpm reload -n` instead of `hl.plugin.load` (use one or the other: `hyprpm reload` unloads a plugin it doesn't manage). Keep the `dofile` line: Hyprland reads the config again once the plugin is loaded, and that's when the binds take.
+Or by hand. You'll need a compiler, `make`, `pkg-config` and Hyprland's headers:
 
-[examples/expanse.lua](examples/expanse.lua) floats every window from its first frame (a window rule; without it, a tiled window floats where it is when the canvas first touches it) and binds <kbd>Alt</kbd> + <kbd>`</kbd>, <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>`</kbd>, <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>C</kbd> and <kbd>Super</kbd> + arrows, with descriptions for Omarchy's key guide. `hl.plugin.expanse.overview()`, `hop("left")`, `tidy()`, `centre()`, `restore_layout(0)` and `auto_centre()` return their actions, like `hl.dsp.*`, so they work in `hl.bind` and `hyprctl dispatch` alike.
+```bash
+git clone https://github.com/invig/expanse-omarchy
+cd expanse-omarchy
+make
+hyprctl plugin load "$PWD/expanse.so"
+```
 
-The hot corner is `plugin:expanse:hot_corner`: `bottom` (both bottom corners, the default, since Omarchy's bar has its menu top left), `all`, `top_left`, `top_right`, `bottom_left`, `bottom_right` or `off`. As on the Mac, it fires when you move into a corner: not when a monitor going away leaves the pointer in one. `plugin:expanse:wallpaper = false` puts the canvas on a plain background instead of the dimmed desktop picture:
+Either way, load the keys from `hyprland.lua`, with `hl.plugin.load("/path/to/expanse.so")`
+before it if you built by hand (with `hyprpm`, `hyprpm reload -n` at startup loads it):
 
 ```lua
-hl.config({ plugin = { expanse = { hot_corner = "all", wallpaper = false } } })
+dofile("/path/to/expanse-omarchy/examples/expanse.lua")
 ```
 
-Those are defaults. As on the Mac, a choice made from the menu below (or `hyprctl expanse corner …` and `wallpaper …`) is saved with the canvas and wins over the config until you pick `default`.
+Rebuild after every Hyprland update. To use Omarchy's menu instead of the bar icon, paste the rows
+from [examples/omarchy-menu.jsonc](examples/omarchy-menu.jsonc) into
+`~/.config/omarchy/extensions/omarchy-menu.jsonc` and run `omarchy menu refresh`.
 
-### In Omarchy's menu
+</details>
 
-Expanse's menu bar icon on the Mac becomes a submenu of Omarchy's menu (<kbd>Super</kbd> + <kbd>Alt</kbd> + <kbd>Space</kbd>): zoom out, tidy up, centre the current window, restore an earlier layout, restore all windows, auto-centre, the desktop picture, pause, the hot corner, and a list of the canvas's keys. Toggles show a ✓ when on. Paste the rows from [examples/omarchy-menu.jsonc](examples/omarchy-menu.jsonc) into `~/.config/omarchy/extensions/omarchy-menu.jsonc`, then:
+Curious how it draws a zoomed-out Hyprland, and how it's tested? See
+[How Expanse works](docs/how-it-works.md).
 
-```sh
-omarchy menu refresh
-```
+## Thanks
 
-Rebuild after every Hyprland update: plugins are tied to the exact Hyprland build.
+- [Expanse for Mac](https://github.com/invig/expanse), whose layout rules this follows line for
+  line.
+- [Phantomat](https://github.com/kaolti/phantomat) by kaolti (BSD-3-Clause), built on
+  [hyprland-scroll-overview](https://github.com/yayuuu/hyprland-scroll-overview), for drawing a
+  window at a box of the plugin's choosing through its animated geometry.
+- [Omarchy](https://omarchy.org), and [Try Omarchy](https://github.com/omacom/try-omarchy), where
+  Expanse was built and tested.
 
-## Scripting and tests
+## Licence
 
-`hyprctl expanse` prints the canvas as JSON. `hyprctl expanse` with `toggle`, `open`, `close`, `tidy`, `centre` (the window you're in), `layout [<n>]` (lists the layout snapshots, or restores one, 0 the newest), `fit`, `zoom <scale>`, `pan <dx> <dy>`, `hop <left|right|up|down>`, `focus <app>` (or `focus address:0x…`, from `hyprctl clients`), `space <name>` (that workspace's canvas, zoomed out), `select all`, `restore` (every window back into view), `pause [toggle]`, `resume`, `autocentre <on|off|toggle>`, `wallpaper <on|off|toggle|default>`, `corner [<corner>|default]` (no corner prints the hot corner's state) or `keys` (the canvas's keys) drives it, and `pick <x> <y>` clicks the canvas at a global logical point. For debugging, `screen <w> <h>` pretends the screen is that size (no size for the real one), and `pinch <scale>…` sends a two-finger pinch through Hyprland's own input path, as a touchpad would. `perf start` records every frame until `perf stop` prints them as JSON (when each started and reached the screen, how long it took to draw, how much of that was the plugin, and how much making text); `perf start gpu` also waits for the GPU to finish each one, to time that. The state's `glides` counts the glides since the plugin loaded, and `lastAnimation` says how the last animation went, as Expanse's log does on the Mac: when its first frame came, how many, and the longest gap. In Lua, `hl.plugin.expanse.pause()` toggles pausing and `restore()` brings windows back into view.
-
-[scripts/sweep.py](scripts/sweep.py) goes through everything this README says, in a Try Omarchy VM, and checks each from the plugin's state: 125 checks, on a headless monitor of its own ([scripts/sweep-monitors.lua](scripts/sweep-monitors.lua), so the VM's window can be moved or resized meanwhile), with real keyboard and pointer input through QMP, pinches and two-finger pans from a virtual touchpad ([scripts/touchpad.py](scripts/touchpad.py), through the kernel's uinput and libinput, as a real one; it needs root in the VM, given with `VM_ASKPASS`) and through Try Omarchy's own pinch device (the one the Mac's trackpad drives), more monitors (headless outputs), a dialog ([scripts/dialog.py](scripts/dialog.py)), and the plugin unloaded mid-glide, zoomed out, mid-drag and as windows open. `make test` checks the nearest-window rule and the layout file case by case. The nearest-window rule, snapping, tidy-up (again for 0.1.20's group by group, on 4,000 layouts), free-space placement and the layout for a smaller screen were also checked against Expanse's own Swift on thousands of random layouts, with no differences.
-
-[scripts/perf.py](scripts/perf.py) times each motion (zooming, panning, glides, hops, and Hyprland's own workspace switch to compare with) on Virtual-1, or with `headless` on a monitor of its own. Virtual-1 is only drawn as fast as the VM's window on the Mac shows it, so keep that window on screen while timing it.
-
-[scripts/vm.sh](scripts/vm.sh) syncs, builds and reloads the plugin in a Try Omarchy VM over SSH. [scripts/qmp-input.py](scripts/qmp-input.py) presses keys and moves and clicks the VM's real pointer through QEMU's QMP socket; a virtual keyboard (`wtype`) can't trigger Hyprland keybinds. `hyprctl output create headless` adds a second monitor to test with (the QMP pointer reaches it), and `hyprctl output remove` unplugs it.
-
-## As on the Mac
-
-- **Zoomed out, keys go to the canvas, not to apps**: they move the highlight, zoom and tidy. Click a window (or press <kbd>Return</kbd>) to use it.
-- **One canvas per monitor.** Expanse on the Mac manages one display; here each monitor's workspace is a canvas of its own (see above).
-- **Menus can't list snapshots by time.** On the Mac, Restore Layout lists each snapshot by when it was taken; Omarchy's menu rows are fixed, so they're Newest, Earlier and Earliest (each shown only when it exists), and `hyprctl expanse layout` gives the times.
-- **A closed window's spot comes back within a session.** On the Mac a window's spot is reused for its app's next window only after a restart; here an app opened again (with none of its windows open) goes back to it straight away, since Linux apps don't hide or minimise windows to bring them back later.
-- **No smart zoom.** A two-finger double-tap on the Mac's trackpad zooms out, or to 100% around the pointer; libinput has no such gesture.
-
-## Credits
-
-Techniques learned from [Phantomat](https://github.com/kaolti/phantomat) by kaolti (BSD-3-Clause), itself built on [hyprland-scroll-overview](https://github.com/yayuuu/hyprland-scroll-overview): drawing a window at a box of the plugin's choosing through its animated geometry.
-
-## License
-
-MIT
+[MIT](LICENSE)

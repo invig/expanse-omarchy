@@ -173,8 +173,9 @@ cmd_remove() {
 # --- The menu: Omarchy's own, with Expanse's rows. A row is
 # "<icon><TAB><label>[<TAB><subtext>]"; the label comes back.
 
+# Wide enough for "Centre Current Window" and its subtexts.
 choose() {
-  omarchy-menu-select "$@" | cut -f1
+  omarchy-menu-select "$@" -- --width 380 | cut -f1
 }
 
 on_off() {
@@ -240,7 +241,7 @@ cmd_menu() {
   picked=$(choose "Expanse" \
     $'\tZoom Out' \
     $'\tTidy Up' \
-    $'\U000F04FE\tCentre Current Window' \
+    $'\uf192\tCentre Current Window' \
     $'\U000F02DA\tRestore Layout\t'"Newest: $newest" \
     $'\tRestore All Windows\tEvery window back into view' \
     $'\tAuto-Centre\t'"$(on_off "$(jq -r .autoCentre <<<"$now")")" \
