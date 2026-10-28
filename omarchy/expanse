@@ -134,12 +134,14 @@ Expanse's keys come from one line at the end of $CONFIG, which loads
 $KEYS:
 
   Alt + \`          zoom out to every window, and back
-  Super + arrows   hop to the nearest window that way (instead of Omarchy's focus keys)
+  Super + arrows   hop to the nearest window that way (in Expanse; Omarchy's
+                   focus keys on other layouts)
   Ctrl + Alt + C   centre the window you're in
   Alt + Shift + \`  auto-centre on or off
+  Super + L        cycle the workspace's layout: tiling, scrolling, floating,
+                   Expanse (Super + Alt + L back)
 
-It also floats every window: Expanse lays windows out on its canvas instead
-of tiling them. The line:
+The line:
 
   $KEYS_LINE
 
@@ -172,9 +174,12 @@ EOF
   fi
   if [[ $(omarchy-hyprland-workspace-layout-current) == expanse ]]; then
     echo "Rest the pointer in a bottom corner of the screen, or press Alt + \`, to zoom out."
-  else
+  elif grep -qxF "$KEYS_LINE" "$CONFIG" 2>/dev/null; then
     echo "Press Super + L until it says Expanse to make a workspace a canvas, then rest"
     echo "the pointer in a bottom corner of the screen, or press Alt + \`, to zoom out."
+  else
+    echo "Pick Use Expanse Here from Expanse's icon in the bar to make a workspace a"
+    echo "canvas, then rest the pointer in a bottom corner of the screen to zoom out."
   fi
   echo "Expanse's icon in the bar has the rest. It loads at every login, and rebuilds"
   echo "itself after Hyprland updates."
