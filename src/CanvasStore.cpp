@@ -106,6 +106,7 @@ namespace Expanse {
         }
         rename(m_scrolled, renames);
         rename(m_lastScreens, renames);
+        rename(m_lastMonitors, renames);
 
         // A window moved to another workspace (a bind, say) has its spot on
         // that workspace's canvas where it is now.
@@ -270,7 +271,7 @@ namespace Expanse {
             if (!monitor || !monitor->m_enabled || !monitor->m_activeWorkspace)
                 continue;
             SOnMonitor here{*this, monitor};
-            m_lastScreens[monitor->m_activeWorkspace->m_name] = usableArea();
+            noteScreen(monitor->m_activeWorkspace, usableArea());
         }
         const auto LAYOUT = Store::load();
         if (!LAYOUT)

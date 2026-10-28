@@ -304,7 +304,8 @@ namespace Expanse {
         wl_event_source*            m_animationTimer = nullptr;
         // Per workspace, the screen its layout was last fitted to: monitors
         // can differ, and a workspace can move between them.
-        std::unordered_map<std::string, CBox> m_lastScreens;
+        std::unordered_map<std::string, CBox>        m_lastScreens;
+        std::unordered_map<std::string, std::string> m_lastMonitors; // and the monitor it was on
         PHLMONITORREF               m_layoutMonitor;   // fitting a monitor other than the focused one
         PHLWORKSPACEREF             m_layoutWorkspace; // placing on a workspace that isn't showing
 
@@ -340,6 +341,7 @@ namespace Expanse {
         // the middle once the layout fits a screen of another size.
         PHLWINDOWREF                m_centreAfterResize;
         void                        centreAfterResize(const PHLWORKSPACE& workspace);
+        void                        noteScreen(const PHLWORKSPACE& workspace, const CBox& screen);
         std::vector<Store::SWindow> m_pool; // saved spots of windows not open now
         std::optional<Store::SLayout> m_lastLayout;     // as last saved, kept as a snapshot before restoring another
         std::optional<int64_t>        m_lastSnapshotAt; // when the newest was taken, once read

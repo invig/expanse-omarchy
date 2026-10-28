@@ -216,7 +216,7 @@ namespace Expanse {
     void CCanvas::simulateScreen(std::optional<Vector2D> size) {
         // The screen it's laid out for now, if it hasn't been noted yet.
         if (const auto WORKSPACE = workspace(); WORKSPACE && !m_lastScreens.contains(WORKSPACE->m_name))
-            m_lastScreens[WORKSPACE->m_name] = usableArea();
+            noteScreen(WORKSPACE, usableArea());
         if (!m_centreAfterResize.lock())
             m_centreAfterResize = Desktop::focusState()->window();
         m_screenOverride = size;
@@ -260,6 +260,11 @@ namespace Expanse {
 
         const CBox     SCREEN = usableArea();
         const auto     LAST   = m_lastScreens.contains(WORKSPACE->m_name) ? std::optional{m_lastScreens[WORKSPACE->m_name]} : std::nullopt;
+        // On another monitor (its own went away, say), not this one changed:
+        // its windows keep their places on the screen, as Hyprland brought them.
+        const auto     WAS     = m_lastMonitors.find(WORKSPACE->m_name);
+        const auto     MONITOR = WORKSPACE->m_monitor.lock();
+        const bool     ANOTHER = LAST && MONITOR && WAS != m_lastMonitors.end() && WAS->second != MONITOR->m_name;
         const Vector2D MOVED  = LAST ? SCREEN.pos() - LAST->pos() : Vector2D{};
         const Vector2D SCROLL = scrolledFor(WORKSPACE);
         if (MOVED != Vector2D{}) {
@@ -269,7 +274,7 @@ namespace Expanse {
             // on the canvas read as they were before anything else.
             m_scrolled[WORKSPACE->m_name] = SCROLL - cameWith(WORKSPACE, SCROLL, MOVED);
         }
-        m_lastScreens[WORKSPACE->m_name] = SCREEN;
+        noteScreen(WORKSPACE, SCREEN);
 
         for (const auto& window : canvasWindows())
             noteOriginal(window);
@@ -280,7 +285,7 @@ namespace Expanse {
         if (MOVED != Vector2D{})
             m_scrolled[WORKSPACE->m_name] = SCROLL - MOVED;
 
-        const bool RESIZED = LAST && (std::abs(LAST->w - SCREEN.w) > 0.5 || std::abs(LAST->h - SCREEN.h) > 0.5);
+        const bool RESIZED = LAST && !ANOTHER && (std::abs(LAST->w - SCREEN.w) > 0.5 || std::abs(LAST->h - SCREEN.h) > 0.5);
         if (RESIZED) {
             // Whatever was in the middle of the old screen stays in the middle of the new one.
             m_scrolled[WORKSPACE->m_name] = scrolledFor(WORKSPACE) - ((SCREEN.size() - LAST->size()) / 2.0).round();
@@ -291,6 +296,12 @@ namespace Expanse {
             centreAfterResize(WORKSPACE);
         damage();
         scheduleSave();
+    }
+
+    void CCanvas::noteScreen(const PHLWORKSPACE& workspace, const CBox& screen) {
+        m_lastScreens[workspace->m_name] = screen;
+        if (const auto MONITOR = workspace->m_monitor.lock())
+            m_lastMonitors[workspace->m_name] = MONITOR->m_name;
     }
 
     void CCanvas::centreAfterResize(const PHLWORKSPACE& workspace) {
@@ -336,7 +347,7 @@ namespace Expanse {
         if (WORKSPACE) {
             const auto IT = m_lastScreens.find(WORKSPACE->m_name);
             if (IT == m_lastScreens.end())
-                m_lastScreens[WORKSPACE->m_name] = SCREEN;
+                noteScreen(WORKSPACE, SCREEN);
             else if (IT->second.pos() != SCREEN.pos() || IT->second.size() != SCREEN.size())
                 relayout();
         }
