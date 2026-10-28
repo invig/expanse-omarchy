@@ -26,6 +26,7 @@
 #include <hyprland/src/render/pass/RectPassElement.hpp>
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 
+#include <cairo/cairo.h>
 #include <wayland-server-core.h>
 
 #include <algorithm>
@@ -349,6 +350,92 @@ namespace Expanse::Render {
         addTexture(g_closeGlyph.tex, (PIXELS.middle() - g_closeGlyph.tex->m_size / 2.0).round());
     }
 
+    // The selection's outline, dashed as on the Mac (Core Animation's 5 and 4
+    // points, 1 pt wide, 6 pt corners). A draw per dash would be hundreds a
+    // frame, so a long strip of dashes each way and a rounded square for the
+    // corners are made once per scale and cropped to each edge and corner.
+    struct SDashes {
+        double                 scale = 0;
+        SP<::Render::ITexture> across, down, corners;
+    };
+    static SDashes g_dashes;
+    constexpr int  DASH_STRIP = 4096; // px; a longer edge takes more than one
+
+    static SP<::Render::ITexture> cairoTexture(int w, int h, const std::function<void(cairo_t*)>& draw) {
+        auto* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+        auto* cairo   = cairo_create(surface);
+        cairo_set_source_rgba(cairo, ACCENT.r, ACCENT.g, ACCENT.b, ACCENT.a);
+        draw(cairo);
+        cairo_surface_flush(surface);
+        auto tex = g_pHyprRenderer->createTexture(surface);
+        cairo_destroy(cairo);
+        cairo_surface_destroy(surface);
+        return tex;
+    }
+
+    static const SDashes& dashes(double scale) {
+        if (g_dashes.scale == scale && g_dashes.across && g_dashes.down && g_dashes.corners)
+            return g_dashes;
+        const int    T   = std::max(1, sc<int>(std::round(scale)));
+        const int    R   = std::max(T, sc<int>(std::round(6 * scale)));
+        const double ON  = 5 * scale;
+        const double OFF = 4 * scale;
+        g_dashes.across  = cairoTexture(DASH_STRIP, T, [&](cairo_t* cairo) {
+            for (double x = 0; x < DASH_STRIP; x += ON + OFF)
+                cairo_rectangle(cairo, x, 0, ON, T);
+            cairo_fill(cairo);
+        });
+        g_dashes.down    = cairoTexture(T, DASH_STRIP, [&](cairo_t* cairo) {
+            for (double y = 0; y < DASH_STRIP; y += ON + OFF)
+                cairo_rectangle(cairo, 0, y, T, ON);
+            cairo_fill(cairo);
+        });
+        // A circle's outline, 2R across, just inside the texture: its quarters
+        // are the corners.
+        g_dashes.corners = cairoTexture(2 * R, 2 * R, [&](cairo_t* cairo) {
+            cairo_set_line_width(cairo, T);
+            cairo_arc(cairo, R, R, R - T / 2.0, 0, 2 * M_PI);
+            cairo_stroke(cairo);
+        });
+        g_dashes.scale   = scale;
+        return g_dashes;
+    }
+
+    static void addDashedOutline(const CBox& px, double scale) {
+        const auto& DASHES = dashes(scale);
+        if (!DASHES.across || !DASHES.down || !DASHES.corners)
+            return;
+        const double T = DASHES.across->m_size.y;
+        const double R = DASHES.corners->m_size.x / 2.0;
+        if (px.w < 2 * R || px.h < 2 * R)
+            return;
+        const auto CROPPED = [](const SP<::Render::ITexture>& tex, const Vector2D& at, const CBox& clip) {
+            if (!drawable(clip))
+                return;
+            CTexPassElement::SRenderData data;
+            data.tex     = tex;
+            data.box     = {at, tex->m_size};
+            data.clipBox = clip;
+            add(makeUnique<CTexPassElement>(std::move(data)));
+        };
+        // The edges between the corners.
+        for (double x = px.x + R; x < px.x + px.w - R; x += DASH_STRIP) {
+            const double LENGTH = std::min<double>(DASH_STRIP, px.x + px.w - R - x);
+            CROPPED(DASHES.across, {x, px.y}, {x, px.y, LENGTH, T});
+            CROPPED(DASHES.across, {x, px.y + px.h - T}, {x, px.y + px.h - T, LENGTH, T});
+        }
+        for (double y = px.y + R; y < px.y + px.h - R; y += DASH_STRIP) {
+            const double LENGTH = std::min<double>(DASH_STRIP, px.y + px.h - R - y);
+            CROPPED(DASHES.down, {px.x, y}, {px.x, y, T, LENGTH});
+            CROPPED(DASHES.down, {px.x + px.w - T, y}, {px.x + px.w - T, y, T, LENGTH});
+        }
+        // The corners, a quarter of the circle each.
+        CROPPED(DASHES.corners, {px.x, px.y}, {px.x, px.y, R, R});
+        CROPPED(DASHES.corners, {px.x + px.w - 2 * R, px.y}, {px.x + px.w - R, px.y, R, R});
+        CROPPED(DASHES.corners, {px.x, px.y + px.h - 2 * R}, {px.x, px.y + px.h - R, R, R});
+        CROPPED(DASHES.corners, {px.x + px.w - 2 * R, px.y + px.h - 2 * R}, {px.x + px.w - R, px.y + px.h - R, R, R});
+    }
+
     static void addGuide(const PHLMONITOR& monitor, const Arrange::SGuide& guide) {
         const Vector2D A = (g_canvas.toScreen(guide.from) - monitor->m_position) * monitor->m_scale;
         const Vector2D B = (g_canvas.toScreen(guide.to) - monitor->m_position) * monitor->m_scale;
@@ -623,8 +710,9 @@ namespace Expanse::Render {
         return PLAIN;
     }
 
-    // Every window's name, and the zoom's digits, made ahead while nothing
-    // moves, a few at a time, so zooming out never waits on making them.
+    // Every window's name, the zoom's digits and the selection's dashes,
+    // made ahead while nothing moves, a few at a time, so zooming out never
+    // waits on making them.
     static wl_event_source* g_prepareTimer = nullptr;
 
     static bool prepareSome() {
@@ -633,8 +721,10 @@ namespace Expanse::Render {
         const auto COLOR = labelColor(PLAIN);
         int        made  = 0;
         for (const auto& monitor : State::monitorState()->monitors())
-            if (monitor && monitor->m_enabled)
+            if (monitor && monitor->m_enabled) {
                 digits(std::round(10 * monitor->m_scale));
+                dashes(monitor->m_scale);
+            }
         for (const auto& window : Desktop::windowState()->windows()) {
             const auto MONITOR = window->m_monitor.lock();
             if (!window->m_isMapped || !MONITOR || !window->m_workspace || window->m_workspace->m_isSpecialWorkspace)
@@ -742,7 +832,7 @@ namespace Expanse::Render {
 
         if (SELECTIONBOUNDS) {
             const CBox SCREEN{g_canvas.toScreen(SELECTIONBOUNDS->pos()), SELECTIONBOUNDS->size() * g_canvas.scale()};
-            addBorder(toPixels(SCREEN.copy().expand(8), MONITOR), ACCENT.modifyA(0.7F), 1, std::round(6 * MONITOR->m_scale));
+            addDashedOutline(toPixels(SCREEN.copy().expand(8), MONITOR), MONITOR->m_scale);
         }
 
         for (const auto& guide : GUIDES)
@@ -832,6 +922,7 @@ namespace Expanse::Render {
         g_labels.clear();
         g_closeGlyph = {};
         g_digits.clear();
+        g_dashes = {};
         g_desktopMaps.clear();
         Toast::shutdown();
         g_spacesHeading = {};

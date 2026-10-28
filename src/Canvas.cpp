@@ -43,6 +43,7 @@ namespace Expanse {
     constexpr double PAN_SECONDS        = 0.25; // on the canvas, following the highlight
     constexpr int    BACK_FROM_FULLSCREEN_MS = 400; // for Hyprland to put a window back in its box
     constexpr auto   BURST              = std::chrono::seconds(3); // an app's windows opening together (a session coming back)
+    constexpr int    ARRIVALS_MS        = 250; // new windows opening one after another count as one arrival
     constexpr double FIT_INSET          = 80.0; // canvas px around everything, when fitting
     constexpr double MIN_SCALE          = 0.03;
     constexpr double MAX_SCALE          = 1.5;
@@ -278,6 +279,7 @@ namespace Expanse {
         // On top for the whole glide, not only once it lands.
         raise(window);
 
+        ++m_glides;
         animateTo(cameraFor(window), STATE_GLIDING, SECONDS);
     }
 
@@ -824,7 +826,7 @@ namespace Expanse {
         if (placeFromSaved(window, FRESH)) {
             scheduleSave();
             if (SHOWING && isCanvasWindow(window) && !live() && !fullyVisible(window))
-                glideTo(window);
+                glideToArrival(window);
             return;
         }
 
@@ -855,7 +857,44 @@ namespace Expanse {
 
         // Off screen: the canvas glides to it, as to any window you go to.
         if (SHOWING && !live() && !fullyVisible(window))
-            glideTo(window);
+            glideToArrival(window);
+    }
+
+    void CCanvas::glideToArrival(PHLWINDOW window) {
+        // Windows opening together (a session coming back, an app opening
+        // several) get one glide, as on the Mac, once they've all arrived: to
+        // the one in focus among them, else the newest.
+        m_arrivals.emplace_back(window);
+        if (!g_pCompositor || !g_pCompositor->m_wlEventLoop)
+            return;
+        if (!m_arrivalTimer)
+            m_arrivalTimer = wl_event_loop_add_timer(
+                g_pCompositor->m_wlEventLoop,
+                [](void* data) {
+                    sc<CCanvas*>(data)->glideToArrivals();
+                    return 0;
+                },
+                this);
+        wl_event_source_timer_update(m_arrivalTimer, ARRIVALS_MS);
+    }
+
+    void CCanvas::glideToArrivals() {
+        const auto WAITING = std::move(m_arrivals);
+        m_arrivals.clear();
+        if (m_paused || live())
+            return;
+        const auto FOCUSED = Desktop::focusState()->window();
+        PHLWINDOW  target;
+        for (const auto& ref : WAITING) {
+            const auto WINDOW = ref.lock();
+            if (!WINDOW || !WINDOW->m_isMapped || !WINDOW->m_workspace || !WINDOW->m_workspace->isVisible())
+                continue;
+            target = WINDOW;
+            if (WINDOW == FOCUSED)
+                break;
+        }
+        if (target)
+            glideTo(target);
     }
 
     void CCanvas::raise(PHLWINDOW window) {
@@ -1372,11 +1411,11 @@ namespace Expanse {
         const auto MAP       = minimap();
         const auto HINT      = m_offscreenHint.lock();
         const auto SCROLLED  = scrolledFor(WORKSPACE);
-        return std::format(R"({{"state":"{}","paused":{},"workspace":"{}","scale":{:.3f},"origin":[{:.1f},{:.1f}],"scrolled":[{:.1f},{:.1f}],"autoCentre":{},"wallpaper":{},"hotCorner":"{}","hover":"{}","target":"{}","marquee":{},"minimap":{},"offscreenNotice":"{}","lastAnimation":"{}","windows":[{}],"spaces":[{}]}})",
+        return std::format(R"({{"state":"{}","paused":{},"workspace":"{}","scale":{:.3f},"origin":[{:.1f},{:.1f}],"scrolled":[{:.1f},{:.1f}],"autoCentre":{},"wallpaper":{},"hotCorner":"{}","hover":"{}","target":"{}","marquee":{},"minimap":{},"offscreenNotice":"{}","lastAnimation":"{}","glides":{},"windows":[{}],"spaces":[{}]}})",
                            STATES[m_state], m_paused, WORKSPACE ? jsonEscape(WORKSPACE->m_name) : "", m_camera.scale, m_camera.origin.x, m_camera.origin.y, SCROLLED.x,
                            SCROLLED.y, m_autoCentre, wallpaper(), jsonEscape(g_hotCorner.corner()), HOVER ? jsonEscape(HOVER->m_title) : "", TARGET ? jsonEscape(TARGET->m_title) : "",
                            MARQUEE ? std::format("[{:.1f},{:.1f},{:.1f},{:.1f}]", MARQUEE->x, MARQUEE->y, MARQUEE->w, MARQUEE->h) : "null",
-                           MAP ? std::format("[{:.0f},{:.0f},{:.0f},{:.0f}]", MAP->box.x, MAP->box.y, MAP->box.w, MAP->box.h) : "null", HINT ? jsonEscape(HINT->m_class) : "", m_lastAnimation,
+                           MAP ? std::format("[{:.0f},{:.0f},{:.0f},{:.0f}]", MAP->box.x, MAP->box.y, MAP->box.w, MAP->box.h) : "null", HINT ? jsonEscape(HINT->m_class) : "", m_lastAnimation, m_glides,
                            windows, spaces) +
             "\n";
     }

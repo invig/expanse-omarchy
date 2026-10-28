@@ -150,6 +150,10 @@ namespace Expanse {
         if (m_focusTimer)
             wl_event_source_remove(m_focusTimer);
         m_focusTimer = nullptr;
+        if (m_arrivalTimer)
+            wl_event_source_remove(m_arrivalTimer);
+        m_arrivalTimer = nullptr;
+        m_arrivals.clear();
     }
 
     void CCanvas::saveNow() {

@@ -1316,6 +1316,48 @@ qmp("key", "ctrl+alt+c")
 settle()
 check("Ctrl + Alt + C centres the window you're in", centred(real()[A]), f"{real()[A]}, the middle is {screen_middle()}")
 
+# Zoomed out, the selection's outline is dashed (5 and 4 pt), as on the Mac:
+# down its left edge, clear of names, about 5 in 9 pixels are the accent.
+zoom_out()
+ctl("select all")
+wait(0.8)
+s = ctl()
+picked = [w["screen"] for w in s["windows"] if w["selected"]]
+left, top = min(b[0] for b in picked) - 8, min(b[1] for b in picked) - 8
+rows = vm(f'grim -g "{int(left) - 1},{int(top) + 12} 3x160" -s 1 /tmp/sweep-strip.png && magick /tmp/sweep-strip.png txt:- | tail -n +2').splitlines()
+accent = {}
+for row in rows:
+    where, _, colour = row.partition("#")
+    if colour:
+        r, g, b = (int(colour[i:i + 2], 16) for i in (0, 2, 4))
+        y = where.split(",")[1].split(":")[0]
+        accent[y] = accent.get(y, False) or (abs(r - 0x8A) < 45 and abs(g - 0xB5) < 45 and abs(b - 0xFA) < 45)
+share = sum(accent.values()) / max(len(accent), 1)
+check("zoomed out, the selection's outline is dashed", len(picked) > 1 and 0.3 < share < 0.8, f"{share:.2f} of {len(accent)} rows")
+qmp("key", "esc")
+settle()
+qmp("key", "esc")
+settle()
+
+# Several windows opening at once, all off screen: one glide, to the newest.
+ctl("screen 900 600")
+wait(2.5)
+glides = ctl()["glides"]
+burst = [f"sweep-burst{i}-{RUN}" for i in range(3)]
+vm("; ".join(f'hyprctl dispatch "hl.dsp.exec_cmd(\\"foot --app-id={app} sleep infinity\\", {{ float = true, size = \\"500 300\\" }})"' for app in burst))
+wait(3)
+settle()
+newest = real().get(burst[-1], [0, 0, 0, 0])
+top = OY + test_monitor()["reserved"][1]
+check("windows opening at once get one glide, to the newest", ctl()["glides"] - glides == 1 and OX <= newest[0] and newest[0] + newest[2] <= OX + 900 and top <= newest[1] and newest[1] + newest[3] <= top + 600,
+      f"{ctl()['glides'] - glides} glides, newest at {newest}")
+ctl("screen")
+wait(2.5)
+for c in clients():
+    if c["class"] in burst:
+        vm(f"kill {c['pid']}")
+wait(1)
+
 # On a workspace of their own: Tidy Up, Restore Layout, and a new tab in a group.
 vm(f'hyprctl dispatch "hl.dsp.focus({{ monitor = \\"{MON}\\" }})"')
 qmp("key", "meta_l+9")

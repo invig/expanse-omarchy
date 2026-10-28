@@ -397,6 +397,13 @@ namespace Expanse {
         // document, a window closing): keyboard focus is acted on once it settles.
         wl_event_source*       m_focusTimer = nullptr;
 
+        // New windows off screen, waiting for one glide (see glideToArrival).
+        std::vector<PHLWINDOWREF> m_arrivals;
+        wl_event_source*          m_arrivalTimer = nullptr;
+        int                       m_glides       = 0; // since loading, for the state
+        void                      glideToArrival(PHLWINDOW window);
+        void                      glideToArrivals();
+
         // A two-finger pan coasts on after the fingers lift, as on the Mac.
         struct {
             std::vector<std::pair<std::chrono::steady_clock::time_point, Vector2D>> recent;
