@@ -23,6 +23,7 @@
 
 #include "Canvas.hpp"
 #include "HotCorner.hpp"
+#include "Mode.hpp"
 #include "Later.hpp"
 #include "Perf.hpp"
 #include "Render.hpp"
@@ -192,6 +193,28 @@ static std::string ctlCommand(eHyprCtlOutputFormat, std::string request) {
         g_canvas.tidy();
     else if (verb == "centre" || verb == "center")
         g_canvas.centreCurrent();
+    else if (verb == "adopt" || verb == "release") {
+        // From omarchy/expanse, switching a workspace between Omarchy's
+        // floating mode and Expanse with its windows left in place: adopt
+        // takes over the windows Omarchy floated; release prints the windows
+        // Expanse floated, for Omarchy to take over, and lets them go.
+        std::string name;
+        words >> name;
+        PHLWORKSPACE match;
+        for (const auto& ref : State::workspaceState()->workspaces())
+            if (const auto WORKSPACE = ref.lock(); WORKSPACE && WORKSPACE->m_name == name)
+                match = WORKSPACE;
+        if (!match)
+            return std::format("no workspace {}\n", name);
+        if (verb == "adopt") {
+            g_canvas.adoptFloated(match);
+            return "ok\n";
+        }
+        std::string out;
+        for (const auto& window : g_canvas.releaseTiled(match))
+            out += std::format("0x{:x}\n", reinterpret_cast<uintptr_t>(window.get()));
+        return out;
+    }
     else if (verb == "layout") {
         // Restore Layout: no number lists the snapshots; 0 is the newest.
         std::string word;
@@ -403,6 +426,14 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         g_canvas.damageDesktopMaps();
         Expanse::Render::prepareLabels();
     }));
+    // Carried to another workspace: once the move has landed (Hyprland is still
+    // committing it now).
+    g_listeners.push_back(events.window.moveToWorkspace.listen([](PHLWINDOW window, PHLWORKSPACE) {
+        later([ref = PHLWINDOWREF{window}] {
+            if (const auto WINDOW = ref.lock())
+                g_canvas.onWindowMoved(WINDOW);
+        });
+    }));
     g_listeners.push_back(events.window.close.listen([](PHLWINDOW window) {
         g_canvas.onWindowClose(window);
         g_canvas.damageDesktopMaps();
@@ -437,6 +468,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     });
     g_ctlCommand = HyprlandAPI::registerHyprCtlCommand(PHANDLE, SHyprCtlCommand{.name = "expanse", .exact = false, .fn = ctlCommand});
 
+    // A workspace whose layout is "expanse" is a canvas: Omarchy's workspace
+    // mode of that name, a workspace rule, or general.layout.
+    if (!Expanse::Mode::add(PHANDLE))
+        fail("couldn't add the expanse layout");
+
     // The canvas comes back where it was, once Hyprland has finished loading us.
     later([] {
         g_canvas.restoreCanvas();
@@ -453,6 +489,11 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_hotCorner.stop();
     Expanse::Render::shutdown();
     // As quitting does on the Mac: the layout is saved, and windows go back.
+    // Saved first, while the workspaces are Expanse's; then they fall back to
+    // Hyprland's default layout, so putting windows back tiles the ones that
+    // arrived tiled.
+    g_canvas.save();
+    Expanse::Mode::remove(PHANDLE);
     g_canvas.shutdown();
     cancelLater();
     if (g_ctlCommand)

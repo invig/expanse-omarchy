@@ -1,6 +1,7 @@
 #define WLR_USE_UNSTABLE
 
 #include "Canvas.hpp"
+#include "Mode.hpp"
 #include "HotCorner.hpp"
 
 #include <hyprland/src/Compositor.hpp>
@@ -57,7 +58,7 @@ namespace Expanse {
     }
 
     static bool onCanvasWorkspace(const PHLWINDOW& window) {
-        return window && window->m_isMapped && !window->m_pinned && window->m_workspace && !window->m_workspace->m_isSpecialWorkspace;
+        return window && window->m_isMapped && !window->m_pinned && window->m_workspace && Mode::isExpanse(window->m_workspace);
     }
 
     Vector2D CCanvas::scrolledFor(const PHLWORKSPACE& workspace) const {
@@ -342,10 +343,12 @@ namespace Expanse {
             const auto TARGET = WINDOW && WINDOW->m_isMapped ? WINDOW->layoutTarget() : nullptr;
             if (!TARGET || Fullscreen::controller()->isFullscreen(WINDOW))
                 continue;
-            if (original.wasTiled) {
+            if (original.wasTiled && !Mode::isExpanse(WINDOW->m_workspace)) {
                 if (TARGET->floating())
                     g_layoutManager->changeFloatingMode(TARGET);
             } else if (TARGET->floating()) {
+                // (Tiled into Expanse's own layout it would float again: paused,
+                // it goes back to the box it had when it arrived.)
                 g_layoutManager->setTargetGeom(original.box, TARGET);
                 TARGET->warpPositionSize();
             }
@@ -378,13 +381,17 @@ namespace Expanse {
         return m_paused;
     }
 
-    void CCanvas::shutdown() {
+    void CCanvas::save() {
         stopSaving();
         if (!m_paused) {
             saveNow();
             reset();
-            putWindowsBack();
         }
+    }
+
+    void CCanvas::shutdown() {
+        if (!m_paused)
+            putWindowsBack();
         m_originals.clear();
         m_pool.clear();
         m_unplaced.clear();

@@ -2,11 +2,14 @@
 
 #include "Canvas.hpp"
 #include "HotCorner.hpp"
+#include "Mode.hpp"
 #include "Later.hpp"
 
 #include <dlfcn.h>
 
 #include <hyprland/src/Compositor.hpp>
+#include <hyprland/src/desktop/rule/windowRule/WindowRuleApplicator.hpp>
+#include <hyprland/src/config/shared/actions/ConfigActions.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/debug/log/Logger.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
@@ -195,7 +198,8 @@ namespace Expanse {
         if (m_paused)
             return false;
         const auto MONITOR = monitor ? monitor : Desktop::focusState()->monitor();
-        if (!MONITOR || !MONITOR->m_activeWorkspace)
+        // Only a workspace in Expanse's layout is a canvas; any other keeps its own.
+        if (!MONITOR || !MONITOR->m_activeWorkspace || !Mode::isExpanse(MONITOR->m_activeWorkspace))
             return false;
 
         m_monitor   = MONITOR;
@@ -303,8 +307,14 @@ namespace Expanse {
     }
 
     void CCanvas::hop(eDirection direction) {
-        if (m_paused)
+        // On a workspace with another layout, or paused, the keys do what
+        // they did before Expanse took them: focus the window that way.
+        const auto FOCUSED_MONITOR = Desktop::focusState()->monitor();
+        if (m_paused || (!live() && (!FOCUSED_MONITOR || !Mode::isExpanse(FOCUSED_MONITOR->m_activeWorkspace)))) {
+            static constexpr Math::eDirection WAYS[] = {Math::DIRECTION_LEFT, Math::DIRECTION_RIGHT, Math::DIRECTION_UP, Math::DIRECTION_DOWN};
+            (void)Config::Actions::moveFocus(WAYS[direction]);
             return;
+        }
         switch (m_state) {
             case STATE_GLIDING: {
                 // Mid-glide: hop on from the window it's heading to, straight away.
@@ -686,6 +696,116 @@ namespace Expanse {
         }
     }
 
+    void CCanvas::adoptTiled(SP<::Layout::ITarget> target, const CBox& box) {
+        const auto WINDOW = target ? target->window() : nullptr;
+        if (!WINDOW || !WINDOW->m_isMapped || target->floating() || Fullscreen::controller()->isFullscreen(WINDOW) || !Mode::isExpanse(WINDOW->m_workspace))
+            return;
+        const CBox BOX = box.w >= 2 && box.h >= 2 ? box : target->position();
+        if (!m_paused) {
+            // Tiled as it arrived: if the workspace takes another layout, or
+            // Expanse is paused or unloaded, it tiles again.
+            SLookAt here{*this, WINDOW->m_workspace};
+            noteOriginal(WINDOW);
+            if (auto* entry = tracked(WINDOW)) {
+                entry->wasTiled = true;
+                entry->box      = BOX;
+            }
+            scheduleSave();
+        }
+        g_layoutManager->changeFloatingMode(target);
+        g_layoutManager->setTargetGeom(BOX, target);
+        target->warpPositionSize();
+    }
+
+    void CCanvas::leaveFloating(const STracked& entry) {
+        // On screen, it stays where it is. Off on the canvas, it goes back
+        // where Hyprland had it, or (that off screen too) to the middle.
+        const auto WINDOW  = entry.window.lock();
+        const auto TARGET  = WINDOW && WINDOW->m_isMapped ? WINDOW->layoutTarget() : nullptr;
+        const auto MONITOR = WINDOW && WINDOW->m_workspace ? WINDOW->m_workspace->m_monitor.lock() : nullptr;
+        if (!TARGET || !TARGET->floating() || !MONITOR || Fullscreen::controller()->isFullscreen(WINDOW))
+            return;
+        const CBox SCREEN{MONITOR->m_position, MONITOR->m_size};
+        const CBox NOW = TARGET->position();
+        if (SCREEN.containsPoint(NOW.middle()))
+            return;
+        CBox box = entry.box;
+        if (box.w < 2 || box.h < 2 || !SCREEN.containsPoint(box.middle())) {
+            const CBox AREA = usableAreaOf(MONITOR);
+            box             = {AREA.middle() - NOW.size() / 2.0, NOW.size()};
+        }
+        g_layoutManager->setTargetGeom(box, TARGET);
+        TARGET->warpPositionSize();
+    }
+
+    void CCanvas::leaveWorkspace(const PHLWORKSPACE& workspace) {
+        // The workspace took another layout: the canvas leaves it, what
+        // arrived tiled tiles again, and the rest stays in view.
+        if (live() && workspace == m_workspace.lock())
+            reset();
+        std::erase_if(m_originals, [&](const STracked& entry) {
+            const auto WINDOW = entry.window.lock();
+            if (!WINDOW || WINDOW->m_workspace != workspace)
+                return false;
+            const auto TARGET = WINDOW->m_isMapped ? WINDOW->layoutTarget() : nullptr;
+            if (entry.wasTiled && TARGET && TARGET->floating() && !Fullscreen::controller()->isFullscreen(WINDOW))
+                g_layoutManager->changeFloatingMode(TARGET);
+            else
+                leaveFloating(entry);
+            return true;
+        });
+        m_scrolled.erase(workspace->m_name);
+        scheduleSave();
+    }
+
+    void CCanvas::adoptFloated(const PHLWORKSPACE& workspace) {
+        SLookAt here{*this, workspace};
+        for (const auto& window : Desktop::windowState()->windows()) {
+            const auto TARGET = window->m_isMapped && window->m_workspace == workspace ? window->layoutTarget() : nullptr;
+            if (!TARGET || !TARGET->floating() || !window->m_ruleApplicator->m_tagKeeper.isTagged("omarchy-mode-floated"))
+                continue;
+            noteOriginal(window);
+            if (auto* entry = tracked(window)) {
+                entry->wasTiled = true;
+                entry->box      = TARGET->position();
+            }
+        }
+        scheduleSave();
+    }
+
+    std::vector<PHLWINDOW> CCanvas::releaseTiled(const PHLWORKSPACE& workspace) {
+        if (live() && workspace == m_workspace.lock())
+            reset();
+        std::vector<PHLWINDOW> released;
+        std::erase_if(m_originals, [&](const STracked& entry) {
+            const auto WINDOW = entry.window.lock();
+            if (!WINDOW || WINDOW->m_workspace != workspace)
+                return false;
+            if (entry.wasTiled)
+                released.push_back(WINDOW);
+            leaveFloating(entry);
+            return true;
+        });
+        m_scrolled.erase(workspace->m_name);
+        scheduleSave();
+        return released;
+    }
+
+    void CCanvas::onWindowMoved(PHLWINDOW window) {
+        // Carried to a workspace with another layout, a window that arrived
+        // tiled tiles again there (into an Expanse one, the layout floats it).
+        if (!window || !window->m_isMapped || !window->m_workspace || window->m_workspace->m_isSpecialWorkspace || Mode::isExpanse(window->m_workspace))
+            return;
+        const auto IT = std::ranges::find_if(m_originals, [&](const STracked& entry) { return entry.window.lock() == window; });
+        if (IT == m_originals.end())
+            return;
+        const auto TARGET = window->layoutTarget();
+        if (IT->wasTiled && TARGET && TARGET->floating() && !Fullscreen::controller()->isFullscreen(window))
+            g_layoutManager->changeFloatingMode(TARGET);
+        m_originals.erase(IT);
+        scheduleSave();
+    }
+
     void CCanvas::leaveFullscreen() {
         const auto WORKSPACE = m_workspace.lock();
         const auto WINDOW    = WORKSPACE ? Fullscreen::controller()->getFullscreenWindow(WORKSPACE) : nullptr;
@@ -764,7 +884,8 @@ namespace Expanse {
         // A new standard window opens in free space beside the window it came
         // from, instead of on top of it. Dialogs keep the spot their app gives
         // them.
-        if (m_paused || !window || window->parent() || window->isModal() || window->isX11OverrideRedirect() || !window->m_workspace)
+        if (m_paused || !window || window->parent() || window->isModal() || window->isX11OverrideRedirect() || !window->m_workspace ||
+            !Mode::isExpanse(window->m_workspace))
             return;
 
         // An app's first window, or one opening in a burst with it (a browser
@@ -797,7 +918,7 @@ namespace Expanse {
     }
 
     void CCanvas::placeNewWindow(PHLWINDOW window, PHLWINDOW anchor) {
-        if (!window->m_isMapped || !window->m_workspace || window->m_workspace->m_isSpecialWorkspace)
+        if (!window->m_isMapped || !window->m_workspace || window->m_workspace->m_isSpecialWorkspace || !Mode::isExpanse(window->m_workspace))
             return;
         // Mid-glide, or with the canvas up on another workspace: once the
         // canvas is back at 100% (or showing its workspace).
@@ -1203,7 +1324,7 @@ namespace Expanse {
 
     std::optional<SMinimap> CCanvas::desktopMinimap(const PHLMONITOR& monitor) const {
         const auto WORKSPACE = monitor ? monitor->m_activeWorkspace : nullptr;
-        if (m_paused || !WORKSPACE || WORKSPACE->m_isSpecialWorkspace || (live() && monitor == m_monitor.lock() && decorated()))
+        if (m_paused || !WORKSPACE || !Mode::isExpanse(WORKSPACE) || (live() && monitor == m_monitor.lock() && decorated()))
             return std::nullopt;
         std::vector<CBox> windows;
         for (const auto& window : Desktop::windowState()->windows())

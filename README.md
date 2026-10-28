@@ -26,19 +26,22 @@ Expanse treats your screen as a view onto a much bigger canvas. Your windows sta
 them on it; you move the view instead of the windows. Rest the pointer in a bottom corner of the
 screen to see everything at once, then click a window to fly to it, ready to use.
 
-It's [Expanse for Mac](https://github.com/invig/expanse) for Omarchy, as a Hyprland plugin.
+It's [Expanse for Mac](https://github.com/invig/expanse) for Omarchy, as a Hyprland plugin, and
+it's one more workspace layout next to Omarchy's own: <kbd>Super</kbd> + <kbd>L</kbd> cycles a
+workspace through tiling, scrolling, floating and Expanse.
 
 - **See everything at once.** Every window, live, laid out the way you arranged it.
 - **Move around by direction.** <kbd>Super</kbd> + arrow keys hop to the next window to the
   left, right, above or below.
 - **Arrange like a design tool.** Drag windows around; they snap into neat, even gaps. New
   windows open beside the one they came from.
-- **A canvas for every workspace.** Each workspace keeps its own layout, and each monitor zooms
-  out on its own.
+- **A canvas for every workspace, or just some.** Make Expanse the layout of every workspace, or
+  only of the ones you switch to it. Each keeps its own canvas, and each monitor zooms out on its
+  own.
 - **At home on a laptop or a big display.** On a smaller screen the layout tightens up, and
   plugging back in puts it back exactly.
-- **Easy to leave.** Pause it or remove it and every window goes straight back to where Hyprland
-  had it, tiled ones back into their layout.
+- **Easy to leave.** Switch a workspace to another layout, pause Expanse or remove it, and every
+  window goes straight back to where Hyprland had it, tiled ones back into their layout.
 
 ## Install
 
@@ -50,8 +53,10 @@ omarchy plugin add https://github.com/invig/expanse-omarchy --enable
 
 Expanse's icon appears in the bar. Click it and pick **Set up Expanse**. That builds Expanse's
 Hyprland plugin from the code you just added, which takes a minute or two, then asks before
-adding the one line to `~/.config/hypr/hyprland.lua` that gives Expanse its keys. From then on
-it loads at every login, and rebuilds itself after Hyprland updates.
+adding the one line to `~/.config/hypr/hyprland.lua` that gives Expanse its keys. Last, it asks
+whether Expanse should be the layout of every workspace or only of the ones you switch to it
+(you can change your mind from the bar icon). From then on it loads at every login, and rebuilds
+itself after Hyprland updates.
 
 Nothing else is downloaded, and nothing needs `sudo`: Omarchy already has the compiler and
 Hyprland's headers.
@@ -60,6 +65,7 @@ Hyprland's headers.
 
 | Do this | To |
 |---|---|
+| <kbd>Super</kbd> + <kbd>L</kbd> | Switch the workspace's layout: tiling, scrolling, floating, Expanse (<kbd>Super</kbd> + <kbd>Alt</kbd> + <kbd>L</kbd> goes back) |
 | Rest the pointer in a bottom corner, or press <kbd>Alt</kbd> + <kbd>`</kbd> | Zoom out to every window (do it again to go back) |
 | Click a window | Glide to it and start using it |
 | <kbd>Super</kbd> + <kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd> | Hop to the next window in that direction |
@@ -90,24 +96,29 @@ Hyprland's headers.
 
 </details>
 
-**Workspaces** each have a canvas of their own. The workspaces bar next to the minimap, at the
-bottom of the screen, shows them; click one to go there, or use Omarchy's workspace keys as usual.
+**Workspaces** in Expanse each have a canvas of their own. The workspaces bar next to the
+minimap, at the bottom of the screen, shows them; click one to go there, or use Omarchy's
+workspace keys as usual. Switch a workspace to another layout and windows that arrived tiled tile
+again, the rest staying where they are on screen; switch it back and they float where they were.
+On a workspace in another layout, <kbd>Super</kbd> + arrows move the focus as Omarchy's keys do.
 
 **Full-screen windows** step out of full screen while you're zoomed out, back to their place among
 the others, and go back to full screen when you return to them.
 
 **The bar icon** has the rest: Tidy Up, Centre Current Window, Restore Layout, Restore All
-Windows, auto-centring, the desktop picture, Pause, which corners to use, and the shortcuts.
-Right-click it to zoom out.
+Windows, auto-centring, the desktop picture, Pause, which corners to use, Expanse here or on
+every workspace, and the shortcuts. Right-click it to zoom out.
 
 ## Questions
 
 <details>
 <summary><strong>The corner or <kbd>Super</kbd> + arrows do nothing</strong></summary>
 
-Click Expanse's icon in the bar. If it offers **Set up Expanse**, Expanse isn't running yet: pick
-it. If setup ran but you said no to adding its line to `hyprland.lua`, add this to the end of
-that file:
+The workspace may be in another layout: press <kbd>Super</kbd> + <kbd>L</kbd> until it says
+Expanse, or pick **Use Expanse Here** from the bar icon.
+
+If the icon offers **Set up Expanse**, Expanse isn't running yet: pick it. If setup ran but you
+said no to adding its line to `hyprland.lua`, add this to the end of that file:
 
 ```lua
 dofile(os.getenv("HOME") .. "/.config/omarchy/plugins/io.github.invig.expanse/examples/expanse.lua")
@@ -164,7 +175,9 @@ Nothing is sent anywhere: Expanse makes no network requests. Its build lives in
 <summary><strong>How is it different from Expanse for Mac?</strong></summary>
 
 - <kbd>Super</kbd> stands in for <kbd>⌘</kbd> and <kbd>⌃</kbd>, and <kbd>Alt</kbd> for <kbd>⌥</kbd>.
-- Every workspace has its own canvas, and every monitor its own view; the Mac uses one display.
+- Expanse is a layout you choose per workspace, next to tiling, scrolling and floating; on the
+  Mac it's every window. Every workspace in it has its own canvas, and every monitor its own view;
+  the Mac uses one display.
 - An app you open again goes straight back to where its window was. On the Mac that waits for a
   restart, since Mac apps hide and minimise windows to bring them back later.
 - Settings live in the bar icon's menu, and in Hyprland's config for the defaults.
@@ -174,16 +187,18 @@ Nothing is sent anywhere: Expanse makes no network requests. Its build lives in
 <details>
 <summary><strong>How do I uninstall it?</strong></summary>
 
-Click Expanse's icon in the bar and pick **Remove Expanse**. Your windows go back where Hyprland
-had them, and it asks before taking its line out of `hyprland.lua` and deleting its saved
-layouts. Or by hand:
+Click Expanse's icon in the bar and pick **Remove Expanse**. Your workspaces go back to the layout
+they had before, your windows go back where Hyprland had them, and it asks before taking its line
+out of `hyprland.lua` and deleting its saved layouts. Or by hand:
 
 ```bash
 omarchy plugin remove io.github.invig.expanse
 rm -rf ~/.local/share/expanse-omarchy ~/.local/state/expanse
 ```
 
-then delete the Expanse line at the end of `~/.config/hypr/hyprland.lua` and log out and back in.
+then delete the Expanse line at the end of `~/.config/hypr/hyprland.lua`, switch any workspace
+still in Expanse to another layout from Omarchy's menu (Appearance › Workspace Layout), and log
+out and back in.
 
 </details>
 
@@ -214,6 +229,16 @@ Also `open`, `close`, `fit`, `zoom <scale>`, `pan <dx> <dy>`, `select all`, `res
 
 <details>
 <summary><strong>Settings in Hyprland's config</strong></summary>
+
+Expanse is a Hyprland layout called `expanse`. Without Omarchy's layout switching, make it every
+workspace's, or some workspaces':
+
+```lua
+hl.config({ general = { layout = "expanse" } })
+hl.workspace_rule({ workspace = "3", layout = "expanse" })
+```
+
+Its own settings:
 
 ```lua
 hl.config({ plugin = { expanse = { hot_corner = "all", wallpaper = false } } })
@@ -249,10 +274,12 @@ hyprctl plugin load "$PWD/expanse.so"
 ```
 
 Either way, load the keys from `hyprland.lua`, with `hl.plugin.load("/path/to/expanse.so")`
-before it if you built by hand (with `hyprpm`, `hyprpm reload -n` at startup loads it):
+before it if you built by hand (with `hyprpm`, `hyprpm reload -n` at startup loads it), and make
+`expanse` the layout of the workspaces you want as canvases (see the settings above):
 
 ```lua
 dofile("/path/to/expanse-omarchy/examples/expanse.lua")
+hl.config({ general = { layout = "expanse" } })
 ```
 
 Rebuild after every Hyprland update. To use Omarchy's menu instead of the bar icon, paste the rows

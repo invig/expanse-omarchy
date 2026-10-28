@@ -22,6 +22,10 @@ namespace Desktop {
     enum eFocusReason : uint8_t;
 }
 
+namespace Layout {
+    class ITarget;
+}
+
 namespace Expanse {
 
     // The camera maps the canvas to one monitor. `origin` is the canvas point
@@ -90,6 +94,17 @@ namespace Expanse {
         void                   close();        // back where you were, or where you've moved to
         void                   glideTo(PHLWINDOW window, bool fromKeyboard = false);
         void                   hop(eDirection direction);
+        // From the expanse layout (Mode.cpp): a window arriving tiled floats
+        // where it is; a workspace taking another layout gets its tiled
+        // windows back as they were.
+        void                   adoptTiled(SP<::Layout::ITarget> target, const CBox& box);
+        void                   leaveWorkspace(const PHLWORKSPACE& workspace);
+        void                   onWindowMoved(PHLWINDOW window);
+        // Omarchy's floating mode and Expanse hand windows to each other in
+        // place: windows Omarchy floated out of tiling are Expanse's to tile
+        // again, and back.
+        void                   adoptFloated(const PHLWORKSPACE& workspace);
+        std::vector<PHLWINDOW> releaseTiled(const PHLWORKSPACE& workspace);
         void                   centreCurrent();
         bool                   pickAt(const Vector2D& pos); // a click at a global logical point
         bool                   switchTo(PHLWORKSPACE workspace); // the canvas comes along, zoomed out
@@ -118,7 +133,8 @@ namespace Expanse {
         void                   pause();         // windows back where they were before the canvas
         void                   resume();
         bool                   paused() const;
-        void                   shutdown();      // saves, then puts windows back
+        void                   save();          // for shutdown: saved while the workspaces are still Expanse's
+        void                   shutdown();      // then windows back
         void                   scheduleSave();
         void                   saveNow();
 
@@ -198,6 +214,7 @@ namespace Expanse {
         bool                   offItsScreen(const PHLWINDOW& window); // on its monitor's canvas, not fully on that screen
         CBox                   usableArea() const;
         CBox                   usableAreaOf(const PHLMONITOR& monitor) const;
+        void                   leaveFloating(const STracked& entry); // a window the canvas leaves, floating
         bool                   onCanvasMonitor(const Vector2D& pos) const; // the canvas is up, and this is on its monitor
         SCamera                homeCamera() const;
         SCamera                fitCamera(double maxScale) const;

@@ -1,6 +1,7 @@
 #define WLR_USE_UNSTABLE
 
 #include "Canvas.hpp"
+#include "Mode.hpp"
 
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
@@ -255,7 +256,7 @@ namespace Expanse {
         }
         followWorkspaces();
         const auto WORKSPACE = workspace();
-        if (!WORKSPACE)
+        if (!WORKSPACE || !Mode::isExpanse(WORKSPACE))
             return;
 
         const CBox     SCREEN = usableArea();
@@ -344,7 +345,7 @@ namespace Expanse {
         SOnMonitor here{*this, monitor};
         const auto WORKSPACE = workspace();
         const CBox SCREEN    = usableArea();
-        if (WORKSPACE) {
+        if (WORKSPACE && Mode::isExpanse(WORKSPACE)) {
             const auto IT = m_lastScreens.find(WORKSPACE->m_name);
             if (IT == m_lastScreens.end())
                 noteScreen(WORKSPACE, SCREEN);

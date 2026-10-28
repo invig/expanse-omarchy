@@ -90,6 +90,16 @@ NAMES = sorted(m["name"] for m in json.loads(vm("hyprctl monitors -j")))
 if NAMES != sorted(["Virtual-1", MON]):
     sys.exit(f"monitors {NAMES}, not Virtual-1 and {MON}: remove the others first (hyprctl output remove NAME)")
 
+# Expanse is a workspace layout. For the run it's every workspace's, as setup's
+# "Every workspace" makes it (Omarchy's commands need its session's PATH), so
+# the run's workspaces are canvases whatever Omarchy renames them to; the
+# default from before comes back at the end.
+OMARCHY = 'export $(tr "\\0" "\\n" < /proc/$(pgrep -x Hyprland)/environ | grep -E "^(OMARCHY_PATH|PATH)=" | xargs); '
+MODES = "~/expanse-hypr/omarchy/expanse"
+if vm(OMARCHY + "omarchy-hyprland-workspace-layout-default").strip() != "expanse":
+    vm(OMARCHY + f"{MODES} everywhere on")
+    atexit.register(lambda: vm(OMARCHY + f"{MODES} everywhere off"))
+
 
 def test_monitor():
     return next(m for m in json.loads(vm("hyprctl monitors -j")) if m["name"] == MON)
@@ -211,6 +221,13 @@ vm(f'hyprctl dispatch "hl.dsp.focus({{ monitor = \\"{MON}\\" }})"')
 qmp("key", f"meta_l+{WORKSPACE_KEY}")
 wait(1)
 WORKSPACE = test_monitor()["activeWorkspace"]["name"]
+
+
+def layout_of(name):
+    return next((w["tiledLayout"] for w in json.loads(vm("hyprctl workspaces -j")) if w["name"] == name), None)
+
+
+check("the run's workspace has Expanse as its layout", layout_of(WORKSPACE) == "expanse", layout_of(WORKSPACE))
 for app, size in zip(APPS, ("900 560", "800 500", "700 440")):
     vm(f'hyprctl dispatch "hl.dsp.exec_cmd(\\"foot --app-id={app} sleep infinity\\", {{ float = true, size = \\"{size}\\" }})"')
     wait(2.2)
@@ -923,22 +940,41 @@ open_app(D, "700 440")
 settle()
 check("after a restart too, a window its app opens again returns to its spot", canvas_of(D) == spot, f"{spot} -> {canvas_of(D)}")
 
-# A tiled window floats on the canvas, and pausing puts it back into the layout.
+# --- Expanse as a workspace layout, next to Omarchy's tiling, scrolling and
+# floating: Super + L cycles a workspace through them, Super + Alt + L back.
+# Another layout tiles the windows that arrived tiled; back in Expanse they
+# float where they were.
+T2 = f"sweep-t2-{RUN}"
+tiled = lambda app: next((not c["floating"] for c in clients() if c["class"] == app), None)
 open_app(T1, "700 440")
 vm(f'hyprctl dispatch "hl.dsp.window.float({{ action = \\"unset\\", window = \\"class:{T1}\\" }})"')
 wait(1.5)
-tiled = lambda: next((not c["floating"] for c in clients() if c["class"] == T1), None)
-was = tiled()
-zoom_out()
-floats = tiled() is False
-qmp("key", "esc")
-settle()
-ctl("pause")
+check("a window tiled on an Expanse workspace floats on the canvas", tiled(T1) is False, tiled(T1))
+focus(T1)
+qmp("key", "meta_l+l", "sleep", 2500)
+rest = [c["floating"] for c in clients() if c["class"].endswith(RUN) and c["class"] != T1 and c["workspace"]["name"] == WORKSPACE]
+check("Super + L takes the workspace to tiling: what arrived tiled tiles, the rest stays floating", layout_of(WORKSPACE) == "dwindle" and tiled(T1) is True and rest and all(rest),
+      f"{layout_of(WORKSPACE)} {tiled(T1)} {rest}")
+vm(f'hyprctl dispatch "hl.dsp.exec_cmd(\\"foot --app-id={T2} sleep infinity\\")"')
+wait(2.4)
+check("a new window there tiles", tiled(T2) is True, tiled(T2))
+ctl("open")
 wait(1.5)
-check("a tiled window floats on the canvas, and pausing puts it back into its layout", was is True and floats and tiled() is True, f"{was} {floats} {tiled()}")
-ctl("resume")
-wait(2)
-vm(f"kill {client(T1)['pid']}")
+check("there's no canvas there: zooming out does nothing", ctl()["state"] == "idle", ctl()["state"])
+focus(T1)
+wait(0.5)
+glides = ctl()["glides"]
+qmp("key", "meta_l+right", "sleep", 1200)
+check("Super + arrows there move the focus as Hyprland's own keys do", active() != T1 and ctl()["glides"] == glides and ctl()["state"] == "idle", f"{active()} {ctl()['glides'] - glides}")
+was = {k: v for k, v in real().items() if k in (T1, T2)}
+qmp("key", "meta_l+alt+l", "sleep", 2500)
+now = {k: v for k, v in real().items() if k in (T1, T2)}
+check("Super + Alt + L back to Expanse: the tiled windows float where they were", layout_of(WORKSPACE) == "expanse" and tiled(T1) is False and tiled(T2) is False and now == was,
+      f"{layout_of(WORKSPACE)} {was} -> {now}")
+for app in (T1, T2):
+    vm(f"kill {client(app)['pid']}")
+wait(1)
+settle()
 
 # A window too big for the screen shrinks to fit as you go to it, and grows back on a bigger one.
 # Sizes relative to the screen: the VM's follows its window on the Mac.

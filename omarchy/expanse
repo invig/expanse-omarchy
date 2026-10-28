@@ -7,6 +7,12 @@
 #   expanse load     at login (the plugin's service): load it, rebuilt first
 #                    if Hyprland or Expanse changed since it was built
 #   expanse remove   unload it, offer to take its keys out, remove the plugin
+#   expanse layout [back]
+#                    SUPER + L: the workspace's layout, through tiling,
+#                    scrolling, floating and Expanse (Omarchy's, plus Expanse)
+#   expanse here [on|off]       Expanse on this workspace, or its default back
+#   expanse everywhere [on|off] Expanse as the layout of every workspace
+#                               without one of its own
 #
 # The Hyprland plugin is built from this checkout, the code you installed,
 # into ~/.local/share/expanse-omarchy; nothing is downloaded.
@@ -147,7 +153,29 @@ EOF
     fi
   fi
   echo
-  echo "Rest the pointer in a bottom corner of the screen, or press Alt + \`, to zoom out."
+  if [[ $(omarchy-hyprland-workspace-layout-default) == expanse ]]; then
+    echo "Expanse is the layout of every workspace that doesn't have one of its own."
+  else
+    echo "Expanse is a workspace layout, next to Omarchy's tiling, scrolling and"
+    echo "floating: Super + L cycles a workspace through them. It can be the layout of"
+    echo "every workspace (each can still be switched with Super + L), or only of the"
+    echo "ones you switch to it."
+    echo
+    if command -v gum >/dev/null; then
+      local choice
+      choice=$(gum choose --header "Use Expanse on" "Every workspace" "Only the ones I switch to it") || choice=""
+      [[ $choice == "Every workspace" ]] && cmd_everywhere on
+    elif ask "Use Expanse on every workspace?"; then
+      cmd_everywhere on
+    fi
+    echo
+  fi
+  if [[ $(omarchy-hyprland-workspace-layout-current) == expanse ]]; then
+    echo "Rest the pointer in a bottom corner of the screen, or press Alt + \`, to zoom out."
+  else
+    echo "Press Super + L until it says Expanse to make a workspace a canvas, then rest"
+    echo "the pointer in a bottom corner of the screen, or press Alt + \`, to zoom out."
+  fi
   echo "Expanse's icon in the bar has the rest. It loads at every login, and rebuilds"
   echo "itself after Hyprland updates."
 }
@@ -156,6 +184,7 @@ cmd_remove() {
   echo "Removing Expanse. Your windows go back where Hyprland had them."
   echo
   ask "Remove Expanse?" || exit 130
+  leave_modes
   [[ $(loaded_from) == "$SO" ]] && hyprctl plugin unload "$SO" >/dev/null
   if grep -qxF "$KEYS_LINE" "$CONFIG" 2>/dev/null && ask "Take Expanse's line out of hyprland.lua?"; then
     local kept
@@ -170,6 +199,200 @@ cmd_remove() {
   omarchy-plugin-remove "$ID" --yes
   echo
   echo "Expanse is removed."
+}
+
+# --- Expanse as a workspace mode, in Omarchy's own: its mode files (one per
+# workspace, and the default), its notification, its bar and dock refreshed.
+
+MODES="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/workspace-layouts"
+
+notify_layout() {
+  local state="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/workspace-layout-notification"
+  local last id
+  [[ -r $state ]] && read -r last <"$state"
+  if id=$(omarchy-notification-send -p -r "${last:-0}" -g 󱂬 "$1") && [[ $id =~ ^[0-9]+$ ]]; then
+    mkdir -p "$(dirname "$state")" && printf '%s\n' "$id" >"$state"
+  fi
+}
+
+mode_message() {
+  case $1 in
+    expanse) echo "Workspace layout set to Expanse" ;;
+    dwindle) omarchy-i18n layout.workspaceTiling ;;
+    scrolling) omarchy-i18n layout.workspaceScrolling ;;
+    *) omarchy-i18n layout.workspaceFloating ;;
+  esac
+}
+
+# A workspace's mode, from the one it has now, saved as its own unless it's the
+# default.
+switch_mode() {
+  local workspace=$1 mode=$2 current=$3
+  # Between Omarchy's floating and Expanse, windows stay where they are: the
+  # mode taking over adopts the windows the other floated out of tiling, to
+  # tile them again when it ends.
+  if [[ $mode == expanse && $current == floating ]]; then
+    hyprctl expanse adopt "$workspace" >/dev/null
+    local address
+    for address in $(hyprctl clients -j | jq -r --arg ws "$workspace" \
+      '.[] | select((.workspace.id | tostring) == $ws and .floating and any(.tags[]?; startswith("omarchy-mode-floated"))) | .address'); do
+      hyprctl dispatch "hl.dsp.window.tag({ tag = \"-omarchy-mode-floated\", window = \"address:$address\" })" >/dev/null
+    done
+  elif [[ $mode == floating && $current == expanse ]]; then
+    local released address
+    released=$(hyprctl expanse release "$workspace")
+    # Floating keeps the layout the workspace had, and Expanse's would keep the
+    # canvas on: tiling first (with the windows not yet Omarchy's, or it would
+    # tile them on the way).
+    hyprctl eval "o.workspace_mode({ workspace = \"$workspace\", mode = \"dwindle\" })" >/dev/null 2>&1
+    for address in $released; do
+      hyprctl dispatch "hl.dsp.window.tag({ tag = \"+omarchy-mode-floated\", window = \"address:$address\" })" >/dev/null
+    done
+  fi
+  local apply="o.workspace_mode({ workspace = \"$workspace\", mode = \"$mode\" })"
+  hyprctl eval "$apply" >/dev/null 2>&1 || return 1
+  if [[ $mode == "$(omarchy-hyprland-workspace-layout-default)" ]]; then
+    rm -f "$MODES/$workspace.lua"
+  else
+    mkdir -p "$MODES" && printf '%s\n' "$apply" >"$MODES/$workspace.lua"
+  fi
+}
+
+# Omarchy's bar and dock show each workspace's mode; floating's titlebars load
+# with the config, as Omarchy's own cycle does it.
+modes_changed() {
+  omarchy-shell -q omarchy.workspaces refresh
+  omarchy-shell -q omarchy.dock refresh
+  if [[ ${1:-} == floating ]] && ! hyprctl plugin list -j 2>/dev/null | jq -e 'any(.[]?; .name == "hyprbars")' >/dev/null 2>&1; then
+    hyprctl reload >/dev/null
+  fi
+}
+
+# The active workspace's mode.
+set_mode() {
+  local mode=$1 workspace
+  workspace=$(hyprctl activeworkspace -j | jq -r '.id')
+  [[ $workspace =~ ^[0-9]+$ ]] || return 1
+  if ! switch_mode "$workspace" "$mode" "$(omarchy-hyprland-workspace-layout-current)"; then
+    notify_layout "$(omarchy-i18n layout.needsReload)"
+    return 1
+  fi
+  notify_layout "$(mode_message "$mode")"
+  modes_changed "$mode"
+}
+
+cmd_layout() {
+  # Without Expanse running, Omarchy's own cycle.
+  if [[ -z $(state) ]]; then
+    exec omarchy-hyprland-workspace-layout-toggle "$@"
+  fi
+  local current next
+  current=$(omarchy-hyprland-workspace-layout-current)
+  if [[ ${1:-} == back ]]; then
+    case $current in
+      dwindle) next=expanse ;;
+      expanse) next=floating ;;
+      floating) next=scrolling ;;
+      *) next=dwindle ;;
+    esac
+  else
+    case $current in
+      dwindle) next=scrolling ;;
+      scrolling) next=floating ;;
+      floating) next=expanse ;;
+      *) next=dwindle ;;
+    esac
+  fi
+  set_mode "$next"
+}
+
+cmd_here() {
+  case ${1:-on} in
+    on) set_mode expanse ;;
+    *)
+      local default
+      default=$(omarchy-hyprland-workspace-layout-default)
+      [[ $default == expanse ]] && default=dwindle
+      set_mode "$default"
+      ;;
+  esac
+}
+
+# Every workspace: Omarchy's default layout (which its own command keeps to
+# tiling, scrolling and floating), and the workspaces there are now, each still
+# free to take another with Super + L. The default it replaces is kept, to go
+# back to.
+BEFORE="$STATE/default-before.lua"
+
+# Each workspace there is, with its mode: read before the default changes, as
+# Omarchy reads a workspace without one of its own from the default.
+workspace_modes() {
+  local workspace
+  for workspace in $(hyprctl workspaces -j | jq -r '.[] | select(.id >= 1) | .id'); do
+    echo "$workspace $(omarchy-hyprland-workspace-layout-current "$workspace")"
+  done
+}
+
+cmd_everywhere() {
+  local before workspace current
+  before=$(workspace_modes)
+  if [[ ${1:-on} == on ]]; then
+    [[ $(omarchy-hyprland-workspace-layout-default) == expanse ]] && return 0
+    mkdir -p "$STATE"
+    if [[ -f $MODES/default.lua ]]; then cp "$MODES/default.lua" "$BEFORE"; else rm -f "$BEFORE"; fi
+    # Each workspace first, from the mode it has, so its windows stay put.
+    while read -r workspace current; do
+      [[ -n $workspace ]] && switch_mode "$workspace" expanse "$current"
+    done <<<"$before"
+    mkdir -p "$MODES"
+    printf 'o.workspace_mode({ default = "expanse" })\n' >"$MODES/default.lua"
+    hyprctl eval 'o.workspace_mode({ default = "expanse" })' >/dev/null 2>&1
+    rm -f "$MODES"/[0-9]*.lua
+    notify_layout "Default layout set to Expanse"
+    modes_changed
+  else
+    [[ $(omarchy-hyprland-workspace-layout-default) == expanse ]] || return 0
+    # The default from before, or (without one saved) Hyprland's own from the
+    # config, which takes a reload to read again.
+    local default=""
+    [[ -f $BEFORE ]] && default=$(sed -n 's/.*default = "\([a-z]*\)".*/\1/p' "$BEFORE")
+    local switched=()
+    if [[ -n $default ]]; then
+      while read -r workspace current; do
+        if [[ $current == expanse && ! -f $MODES/$workspace.lua ]]; then
+          switch_mode "$workspace" "$default" expanse && switched+=("$workspace")
+        fi
+      done <<<"$before"
+      mv "$BEFORE" "$MODES/default.lua"
+      hyprctl eval "o.workspace_mode({ default = \"$default\" })" >/dev/null 2>&1
+      for workspace in "${switched[@]}"; do rm -f "$MODES/$workspace.lua"; done
+    else
+      rm -f "$MODES/default.lua" "$BEFORE"
+      hyprctl reload >/dev/null
+      default=$(omarchy-hyprland-workspace-layout-default)
+    fi
+    case $default in
+      scrolling) notify_layout "$(omarchy-i18n layout.defaultScrolling)" ;;
+      floating) notify_layout "$(omarchy-i18n layout.defaultFloating)" ;;
+      *) notify_layout "$(omarchy-i18n layout.defaultTiling)" ;;
+    esac
+    modes_changed "$default"
+  fi
+}
+
+# Out of Omarchy's modes, before the layout goes with the plugin: every
+# workspace back to the default it had.
+leave_modes() {
+  cmd_everywhere off
+  local workspace current
+  while read -r workspace current; do
+    [[ $current == expanse ]] && switch_mode "$workspace" "$(omarchy-hyprland-workspace-layout-default)" expanse
+  done <<<"$(workspace_modes)"
+  local file
+  for file in "$MODES"/[0-9]*.lua; do
+    [[ -f $file ]] && grep -q 'mode = "expanse"' "$file" && rm -f "$file"
+  done
+  modes_changed
 }
 
 # --- The menu: Omarchy's own, with Expanse's rows. A row is
@@ -235,11 +458,30 @@ cmd_menu() {
     exit 0
   fi
 
-  local newest corner paused
+  local newest corner paused mode everywhere
   newest=$(hyprctl expanse layout 2>/dev/null | jq -r '.[0].ago // "none yet"')
   corner=$(jq -r '.hotCorner' <<<"$now" | sed 's/_/ /; s/\b\(.\)/\u\1/g')
   paused=$(jq -r .paused <<<"$now")
+  mode=$(omarchy-hyprland-workspace-layout-current)
+  everywhere=$([[ $(omarchy-hyprland-workspace-layout-default) == expanse ]] && echo true || echo false)
   local picked
+  if [[ $mode != expanse ]]; then
+    # A workspace with another layout: Expanse isn't a canvas here.
+    picked=$(choose "Expanse" \
+      $'\tUse Expanse Here\tThis workspace as a canvas (Super + L)' \
+      $'\tEvery Workspace\t'"$(on_off "$everywhere")" \
+      $'\tHot Corner\t'"$corner" \
+      $'\tShortcuts' \
+      $'\tRemove Expanse') || exit 0
+    case $picked in
+      "Use Expanse Here") cmd_here on ;;
+      "Every Workspace") cmd_everywhere "$([[ $everywhere == true ]] && echo off || echo on)" ;;
+      "Hot Corner") hot_corner_menu ;;
+      "Shortcuts") in_terminal hyprctl expanse keys ;;
+      "Remove Expanse") in_terminal "$SELF" remove ;;
+    esac
+    exit 0
+  fi
   picked=$(choose "Expanse" \
     $'\tZoom Out' \
     $'\tTidy Up' \
@@ -250,10 +492,14 @@ cmd_menu() {
     $'\tDesktop Picture\t'"$(on_off "$(jq -r .wallpaper <<<"$now")")" \
     $'\t'"$([[ $paused == true ]] && echo Resume || echo Pause)"$'\tWindows back where they were before the canvas' \
     $'\tHot Corner\t'"$corner" \
+    $'\tStop Using Expanse Here\tThis workspace back to tiling (Super + L cycles)' \
+    $'\tEvery Workspace\t'"$(on_off "$everywhere")" \
     $'\tShortcuts' \
     $'\tRemove Expanse') || exit 0
 
   case $picked in
+    "Stop Using Expanse Here") cmd_here off ;;
+    "Every Workspace") cmd_everywhere "$([[ $everywhere == true ]] && echo off || echo on)" ;;
     "Zoom Out") hyprctl expanse toggle >/dev/null ;;
     "Tidy Up") hyprctl expanse tidy >/dev/null ;;
     "Centre Current Window") hyprctl expanse centre >/dev/null ;;
@@ -270,6 +516,9 @@ cmd_menu() {
 }
 
 case ${1:-} in
+  layout) shift; cmd_layout "$@" ;;
+  here) shift; cmd_here "$@" ;;
+  everywhere) shift; cmd_everywhere "$@" ;;
   menu) cmd_menu ;;
   setup) cmd_setup ;;
   load) cmd_load ;;

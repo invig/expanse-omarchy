@@ -16,10 +16,13 @@ local bind = (o and o.bind) or function(keys, _description, action)
   hl.bind(keys, action)
 end
 
--- Every window lives on the canvas floating, at its own size, from its first
--- frame (modal dialogs float on their own account). Expanse moves each new one
--- into free space beside what you were working on.
-hl.window_rule({ name = "expanse-canvas", match = { modal = false }, float = true })
+-- Expanse is a layout, "expanse": a workspace with that layout is a canvas,
+-- and every other one keeps its own. On Omarchy, SUPER + L cycles a workspace
+-- through tiling, scrolling, floating and Expanse (below), and Expanse's setup
+-- can make it the default. Elsewhere, for every workspace:
+-- hl.config({ general = { layout = "expanse" } })
+-- or for some:
+-- hl.workspace_rule({ workspace = "3", layout = "expanse" })
 
 -- Resting the pointer in a corner zooms out too: "bottom" (the default; the
 -- bar has Omarchy's menu top left), "all", "top_left", "top_right",
@@ -34,8 +37,9 @@ bind("ALT + grave", "Zoom out to every window", hl.plugin.expanse.overview())
 
 -- SUPER + arrows hop to the nearest window that way, as ⌃ + arrows on the Mac.
 -- They replace Omarchy's focus keys (movefocus), which do the same job on a
--- canvas less well; Hyprland fires every bind on a key, so those go first.
--- CTRL + arrows stay with apps (word-jump).
+-- canvas less well, and do what those did on a workspace with another
+-- layout. Hyprland fires every bind on a key, so those go first. CTRL +
+-- arrows stay with apps (word-jump).
 for _, direction in ipairs({ "left", "right", "up", "down" }) do
   hl.unbind("SUPER + " .. direction)
   bind("SUPER + " .. direction, "Hop to the window " .. (direction == "up" and "above" or direction == "down" and "below" or "on the " .. direction),
@@ -48,3 +52,17 @@ bind("CTRL + ALT + C", "Centre the window you're in", hl.plugin.expanse.centre()
 -- ALT + SHIFT + ` turns auto-centre on or off: off, clicking a window that's
 -- partly on screen leaves the canvas where it is, for side-by-side work.
 bind("ALT + SHIFT + grave", "Auto-centre on or off", hl.plugin.expanse.auto_centre())
+
+-- On Omarchy, SUPER + L (and SUPER + ALT + L, back) cycles the workspace
+-- through Omarchy's layouts with Expanse added after floating, as
+-- omarchy/expanse in this checkout does it.
+local here = debug.getinfo(1, "S").source:match("^@(.*)/examples/[^/]+$")
+local cycle = here and (here .. "/omarchy/expanse")
+local found = cycle and io.open(cycle, "r")
+if o and found then
+  found:close()
+  hl.unbind("SUPER + L")
+  hl.unbind("SUPER + ALT + L")
+  bind("SUPER + L", "Cycle workspace layout", cycle .. " layout")
+  bind("SUPER + ALT + L", "Cycle workspace layout back", cycle .. " layout back")
+end

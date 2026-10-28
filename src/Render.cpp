@@ -2,6 +2,7 @@
 
 #include "Render.hpp"
 #include "Canvas.hpp"
+#include "Mode.hpp"
 #include "Perf.hpp"
 #include "Toast.hpp"
 
@@ -608,7 +609,7 @@ namespace Expanse::Render {
 
     static bool onAnotherCanvas(const PHLWINDOW& window, const PHLMONITOR& monitor) {
         if (!window->m_isMapped || !window->m_isFloating || window->m_pinned || window->m_monitorMovedFrom != -1 || !window->m_workspace ||
-            window->m_workspace->m_isSpecialWorkspace || !window->m_workspace->isVisible())
+            !Mode::isExpanse(window->m_workspace) || !window->m_workspace->isVisible())
             return false;
         const auto OWN = window->m_monitor.lock();
         if (!OWN || OWN == monitor)
