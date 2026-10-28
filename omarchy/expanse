@@ -484,7 +484,7 @@ cmd_menu() {
   if [[ $mode != expanse ]]; then
     # A workspace with another layout: Expanse isn't a canvas here.
     picked=$(choose "Expanse" \
-      $'\tUse Expanse Here\tThis workspace as a canvas (Super + L)' \
+      $'\tUse Expanse Here\tThis workspace as a canvas' \
       $'\tEvery Workspace\t'"$(on_off "$everywhere")" \
       $'\tHot Corner\t'"$corner" \
       $'\tShortcuts' \
@@ -506,9 +506,9 @@ cmd_menu() {
     $'\tRestore All Windows\tEvery window back into view' \
     $'\tAuto-Centre\t'"$(on_off "$(jq -r .autoCentre <<<"$now")")" \
     $'\tDesktop Picture\t'"$(on_off "$(jq -r .wallpaper <<<"$now")")" \
-    $'\t'"$([[ $paused == true ]] && echo Resume || echo Pause)"$'\tWindows back where they were before the canvas' \
+    $'\t'"$([[ $paused == true ]] && echo Resume || echo Pause)"$'\tWindows back where Hyprland had them' \
     $'\tHot Corner\t'"$corner" \
-    $'\tStop Using Expanse Here\tThis workspace back to tiling (Super + L cycles)' \
+    $'\tStop Using Expanse Here\tThis workspace back to tiling' \
     $'\tEvery Workspace\t'"$(on_off "$everywhere")" \
     $'\tShortcuts' \
     $'\tRemove Expanse') || exit 0
