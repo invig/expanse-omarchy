@@ -96,6 +96,13 @@ namespace Expanse::Arrange {
     // Every anchor as near as the nearest (see anchor), first one first.
     std::vector<SAnchor> anchors(size_t i, const std::vector<CBox>& frames);
 
+    // Whether `anchor` is as near as window `i`'s nearest among `frames`, of
+    // either kind (none: whether it has none). Shrinking windows to the same
+    // width can put a window in a column exactly the standard gap from the
+    // window beside it: a tie the gap wins (see anchor), though the column
+    // still explains where it is.
+    bool isNearest(const std::optional<SAnchor>& anchor, size_t i, const std::vector<CBox>& frames);
+
     // Origins for windows of `sizes` that keep the `home` layout where you see
     // it: each window keeps its gap to its nearest window on the left or,
     // nearer still, its left edge's offset from a window above or below it (a

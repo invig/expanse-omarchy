@@ -379,14 +379,16 @@ namespace Expanse::Arrange {
         return {box.y, box.x, box.h, box.w};
     }
 
-    std::vector<SAnchor> anchors(size_t i, const std::vector<CBox>& frames) {
+    struct SCost {
+        double  cost;
+        bool    edge;
+        SAnchor anchor;
+    };
+
+    // Window `i`'s possible anchors among `frames`, each with how far it is (see anchor).
+    static std::vector<SCost> anchorCandidates(size_t i, const std::vector<CBox>& frames) {
         // Distance between ranges; 0 when they overlap.
         const auto SPAN = [](double a0, double a1, double b0, double b1) { return std::max(0.0, std::max(a0, b0) - std::min(a1, b1)); };
-        struct SCost {
-            double  cost;
-            bool    edge;
-            SAnchor anchor;
-        };
         const CBox&        R = frames[i];
         std::vector<SCost> candidates;
         for (size_t j = 0; j < frames.size(); ++j) {
@@ -399,18 +401,33 @@ namespace Expanse::Arrange {
                      (maxY(O) <= minY(R) + 0.5 || maxY(R) <= minY(O) + 0.5))
                 candidates.push_back({SPAN(minY(O), maxY(O), minY(R), maxY(R)) + 2 * std::abs(minX(R) - minX(O)), true, {true, j}});
         }
-        if (candidates.empty())
+        return candidates;
+    }
+
+    std::vector<SAnchor> anchors(size_t i, const std::vector<CBox>& frames) {
+        const auto CANDIDATES = anchorCandidates(i, frames);
+        if (CANDIDATES.empty())
             return {};
         // The first of the cheapest, gaps before edges.
-        const SCost* best = &candidates.front();
-        for (const auto& c : candidates)
+        const SCost* best = &CANDIDATES.front();
+        for (const auto& c : CANDIDATES)
             if (std::pair{c.cost, c.edge ? 1 : 0} < std::pair{best->cost, best->edge ? 1 : 0})
                 best = &c;
         std::vector<SAnchor> out;
-        for (const auto& c : candidates)
+        for (const auto& c : CANDIDATES)
             if (c.edge == best->edge && c.cost <= best->cost + 0.5)
                 out.push_back(c.anchor);
         return out;
+    }
+
+    bool isNearest(const std::optional<SAnchor>& anchor, size_t i, const std::vector<CBox>& frames) {
+        const auto CANDIDATES = anchorCandidates(i, frames);
+        if (!anchor || CANDIDATES.empty())
+            return !anchor && CANDIDATES.empty();
+        double best = CANDIDATES.front().cost;
+        for (const auto& c : CANDIDATES)
+            best = std::min(best, c.cost);
+        return std::ranges::any_of(CANDIDATES, [&](const SCost& c) { return c.anchor == *anchor && c.cost <= best + 0.5; });
     }
 
     std::optional<SAnchor> anchor(size_t i, const std::vector<CBox>& frames) {
@@ -508,7 +525,7 @@ namespace Expanse::Arrange {
             for (const auto& box : HOME)
                 homeFlipped.push_back(transposed(box));
             for (size_t i = 0; i < N; ++i)
-                if (DERIVED[i].distance(here[i].pos()) >= 1 || anchor(i, HOME) != anchor(i, here) || anchor(i, homeFlipped) != anchor(i, hereFlipped))
+                if (DERIVED[i].distance(here[i].pos()) >= 1 || !isNearest(anchor(i, HOME), i, here) || !isNearest(anchor(i, homeFlipped), i, hereFlipped))
                     strays.insert(i);
 
             // Left to right and top to bottom, so a stray next to another

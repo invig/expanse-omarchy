@@ -68,6 +68,23 @@ for c in json.loads(vm("hyprctl clients -j")):
 if "error" in ctl():
     sys.exit(f"hyprctl expanse doesn't answer ({ctl()['error']}): load the plugin first")
 
+
+# The VM's footprint on the Mac. Its GPU memory lives outside its RAM setting,
+# and a long day of runs (each makes a big headless monitor) once took it to
+# 27 GB: a run doesn't start past 16 GB, and says what it cost.
+def vm_memory_gb():
+    pid = subprocess.run(["pgrep", "-f", "runtime/bin/Try Omarchy"], capture_output=True, text=True).stdout.split()
+    if not pid:
+        return None
+    mem = subprocess.run(["top", "-l", "1", "-pid", pid[0], "-stats", "mem"], capture_output=True, text=True).stdout.split()[-1].rstrip("+-")
+    return float(mem[:-1]) / {"K": 1024 * 1024, "M": 1024, "G": 1}.get(mem[-1], float("nan"))
+
+
+MEMORY_AT_START = vm_memory_gb()
+if MEMORY_AT_START and MEMORY_AT_START > 16:
+    sys.exit(f"the VM is using {MEMORY_AT_START:.1f} GB on the Mac: restart it (Try Omarchy) before a run")
+atexit.register(lambda: print(f"VM memory on the Mac: {MEMORY_AT_START or 0:.1f} GB at the start, {vm_memory_gb() or 0:.1f} GB at the end"))
+
 # The sweep runs on a monitor of its own. Virtual-1 follows the VM's window
 # on the Mac (moving or resizing that changes the screen mid-run); a headless
 # output doesn't. Both are pinned, Virtual-1 at 0, 0 and the test monitor
@@ -1245,7 +1262,9 @@ vm("hyprctl output remove SWEEP-2")
 wait(3)
 gone = real()[G]
 landed = next(m for m in json.loads(vm("hyprctl monitors -j")) if m["id"] == client(G)["monitor"])
-check("unplugging a monitor keeps its windows' places on the screen", gone[0] == g[0] - sx + landed["x"] and gone[1] == g[1] - sy + landed["y"], f"{g} -> {gone} on {landed['name']}")
+# Places on the screen below its bar: the two monitors' bars can differ in height.
+check("unplugging a monitor keeps its windows' places on the screen",
+      gone[0] == g[0] - sx + landed["x"] and gone[1] == g[1] - (sy + second["reserved"][1]) + landed["y"] + landed["reserved"][1], f"{g} -> {gone} on {landed['name']}")
 # Hyprland moves the pointer about as the monitor goes (often into a
 # bottom corner of another), and re-sends its position as windows close
 # there. That isn't moving into the hot corner.
