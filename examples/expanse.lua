@@ -3,7 +3,7 @@
 -- Load the plugin first, from hyprland.lua:
 --   hl.plugin.load("/path/to/expanse.so")
 -- then load this file after it:
---   dofile("/path/to/expanse-hypr/examples/expanse.lua")
+--   dofile("/path/to/expanse-omarchy/examples/expanse.lua")
 
 -- Hyprland reads the config again once the plugin is in; until then
 -- hl.plugin.expanse doesn't exist.

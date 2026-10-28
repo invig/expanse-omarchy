@@ -5,7 +5,7 @@ Feasible, and easier than on macOS: a Hyprland plugin runs inside the compositor
 
 ## VM on this Mac
 - try-omarchy is a notarized Mac app: QEMU + Apple Hypervisor framework + VirGL GPU, running stock aarch64 Omarchy (edge channel), plus one guest package for Mac integration.
-- Needs Apple Silicon, macOS 15+, ~15 GB. This Mac: Apple M5, 32 GB, macOS 27.0.1. Supported.
+- Needs Apple Silicon, macOS 15+, ~15 GB.
 - Route: v1.2.0 `TryOmarchy.dmg` (14 MB) from GitHub releases; first launch downloads the ~3 GB image. First boot runs Omarchy's setup (the account). Launcher "Port Forwarding → Add SSH" forwards Mac 127.0.0.1:2222 to guest 22.
 - Guest: Omarchy 4.0.0, kernel 7.2.8, Hyprland 0.56.2 with headers, GCC 16, Lua 5.5. No `hyprpm` by default (it's in the omarchy repo).
 - Real keyboard and pointer input reach the guest through QEMU's QMP socket (`send-key`, `input-send-event`). A virtual keyboard (`wtype`) can't trigger Hyprland keybinds.

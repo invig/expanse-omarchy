@@ -68,6 +68,8 @@ A full-screen (or maximised) window sits outside the canvas, as a full-screen ap
 You need Hyprland's headers (`hyprland` on Arch and Omarchy ships them), `base-devel` and `pkg-config`.
 
 ```sh
+git clone https://github.com/invig/expanse-omarchy
+cd expanse-omarchy
 make
 hyprctl plugin load "$PWD/expanse.so"
 ```
@@ -75,9 +77,20 @@ hyprctl plugin load "$PWD/expanse.so"
 To load it at login, add to `~/.config/hypr/hyprland.lua`:
 
 ```lua
-hl.plugin.load("/path/to/expanse-hypr/expanse.so")
-dofile("/path/to/expanse-hypr/examples/expanse.lua")
+hl.plugin.load("/path/to/expanse-omarchy/expanse.so")
+dofile("/path/to/expanse-omarchy/examples/expanse.lua")
 ```
+
+Or with `hyprpm` (on Omarchy, `sudo pacman -S hyprpm` first): it builds the plugin against the headers of the Hyprland you're running and loads it.
+
+```sh
+hyprpm update
+hyprpm add https://github.com/invig/expanse-omarchy
+hyprpm enable expanse
+hyprpm reload -n
+```
+
+Then load it at login with `hyprpm reload -n` instead of `hl.plugin.load` (use one or the other: `hyprpm reload` unloads a plugin it doesn't manage). Keep the `dofile` line: Hyprland reads the config again once the plugin is loaded, and that's when the binds take.
 
 [examples/expanse.lua](examples/expanse.lua) floats every window from its first frame (a window rule; without it, a tiled window floats where it is when the canvas first touches it) and binds <kbd>Alt</kbd> + <kbd>`</kbd>, <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>`</kbd>, <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>C</kbd> and <kbd>Super</kbd> + arrows, with descriptions for Omarchy's key guide. `hl.plugin.expanse.overview()`, `hop("left")`, `tidy()`, `centre()`, `restore_layout(0)` and `auto_centre()` return their actions, like `hl.dsp.*`, so they work in `hl.bind` and `hyprctl dispatch` alike.
 
@@ -96,17 +109,6 @@ Expanse's menu bar icon on the Mac becomes a submenu of Omarchy's menu (<kbd>Sup
 ```sh
 omarchy menu refresh
 ```
-
-Or with `hyprpm` (on Omarchy, `sudo pacman -S hyprpm` first): it builds the plugin against the headers of the Hyprland you're running and loads it.
-
-```sh
-hyprpm update
-hyprpm add <this repository>
-hyprpm enable expanse
-hyprpm reload -n
-```
-
-Then load it at login with `hyprpm reload -n` instead of `hl.plugin.load` (use one or the other: `hyprpm reload` unloads a plugin it doesn't manage). Keep the `dofile` line: Hyprland reads the config again once the plugin is loaded, and that's when the binds take.
 
 Rebuild after every Hyprland update: plugins are tied to the exact Hyprland build.
 
