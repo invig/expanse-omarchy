@@ -480,18 +480,21 @@ troubleshooting_menu() {
     "Detailed Logging") hyprctl expanse logging toggle >/dev/null ;;
     "Copy Logs for a Bug Report") cmd_report ;;
     "Show Log") in_terminal "$SELF" log ;;
-    "Report an Issue") xdg-open "$ISSUES" >/dev/null 2>&1 & ;;
+    # Out of the menu's process group, or it goes when the menu does.
+    "Report an Issue") setsid -f xdg-open "$ISSUES" >/dev/null 2>&1 ;;
   esac
 }
 
-# The log: the Detailed Logging file while it's being written, else this run's lines.
+# The log: the Detailed Logging file while it's being written, else this run's
+# lines; this run's too when the file has less (logging only just turned on).
 current_log() {
-  local file
+  local file run
   file=$(hyprctl expanse logging 2>/dev/null | jq -r 'select(.on) | .file')
-  if [[ -n $file && -s $file ]]; then
+  run=$(hyprctl expanse log 2>/dev/null)
+  if [[ -n $file && -s $file ]] && (($(stat -c %s "$file") >= ${#run})); then
     tail -c "${1:-45000}" "$file"
   else
-    hyprctl expanse log 2>/dev/null | tail -c "${1:-45000}"
+    printf '%s\n' "$run" | tail -c "${1:-45000}"
   fi
 }
 
