@@ -278,6 +278,8 @@ namespace Expanse {
         void                   relayout();       // the focused monitor's workspace (or m_layoutMonitor's)
         void                   relayoutAll();    // every monitor's
         void                   relayoutOn(const PHLMONITOR& monitor);
+        bool                   reservedOnly(const PHLWORKSPACE& workspace, const PHLMONITOR& monitor) const; // only its reserved space changed
+        void                   checkReserved(const PHLMONITOR& monitor);
         Vector2D               cameWith(const PHLWORKSPACE& workspace, const Vector2D& scroll, const Vector2D& moved) const;
         PHLWINDOW              topWindowInView(PHLWINDOW excluding) const;
         PHLWINDOW              sourceOf(PHLWINDOW window) const;
@@ -345,6 +347,12 @@ namespace Expanse {
         // can differ, and a workspace can move between them.
         std::unordered_map<std::string, CBox>        m_lastScreens;
         std::unordered_map<std::string, std::string> m_lastMonitors; // and the monitor it was on
+        // ... and that monitor's own box, so a change in its reserved space
+        // alone (a bar arriving or going) isn't taken for a resize. None while
+        // the screen size is pretended (`screen`).
+        std::unordered_map<std::string, CBox>        m_lastMonitorBoxes;
+        bool                                         m_relayoutPending = false; // the screen changed; fitting once it settles
+        bool                                         m_reservedQueued  = false; // a bar's change noticed, fitting next
         // Per workspace, the screen size its layout was last fitted to, kept
         // with the layout: at the next fit (or load), windows move only by
         // however much the screen differs.

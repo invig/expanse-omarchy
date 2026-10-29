@@ -582,6 +582,7 @@ namespace Expanse {
     void CCanvas::onPreRender(PHLMONITOR monitor) {
         if (!m_paused)
             followWorkspaces();
+        checkReserved(monitor);
         if (!live() || monitor != m_monitor.lock())
             return;
 

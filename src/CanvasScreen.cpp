@@ -2,6 +2,7 @@
 
 #include "Canvas.hpp"
 #include "Log.hpp"
+#include "Later.hpp"
 #include "Mode.hpp"
 
 #include <hyprland/src/Compositor.hpp>
@@ -363,6 +364,7 @@ namespace Expanse {
         m_settledAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(RELAYOUT_DELAY + 500);
         if (m_paused || !g_pCompositor || !g_pCompositor->m_wlEventLoop)
             return;
+        m_relayoutPending = true;
         // The window you're in, before anything moves: once the layout fits
         // the new screen, it's in the middle.
         if (!m_centreAfterResize.lock())
@@ -397,9 +399,12 @@ namespace Expanse {
         const auto     WAS     = m_lastMonitors.find(WORKSPACE->m_name);
         const auto     MONITOR = WORKSPACE->m_monitor.lock();
         const bool     ANOTHER = LAST && MONITOR && WAS != m_lastMonitors.end() && WAS->second != MONITOR->m_name;
+        // Only its reserved space changed (a bar arriving or going): the
+        // windows move with the usable area, and that's no resize.
+        const bool     RESERVED = LAST && !ANOTHER && reservedOnly(WORKSPACE, MONITOR);
         const Vector2D MOVED  = LAST ? SCREEN.pos() - LAST->pos() : Vector2D{};
         const Vector2D SCROLL = scrolledFor(WORKSPACE);
-        if (MOVED != Vector2D{}) {
+        if (MOVED != Vector2D{} && !RESERVED) {
             // On another monitor, or this one moved. Hyprland brings floating
             // windows along when it moves a workspace off a monitor that went
             // away, but not back again: see how far they came, so their spots
@@ -426,9 +431,9 @@ namespace Expanse {
         if (MOVED != Vector2D{})
             m_scrolled[WORKSPACE->m_name] = SCROLL - MOVED;
 
-        const bool RESIZED = LAST && !ANOTHER && (std::abs(LAST->w - SCREEN.w) > 0.5 || std::abs(LAST->h - SCREEN.h) > 0.5);
-        Log::info("screen change for workspace {}: {} {:.0f}x{:.0f}{}", WORKSPACE->m_name, ANOTHER ? "now on monitor" : "monitor", SCREEN.w, SCREEN.h,
-                  LAST ? std::format(", was {:.0f}x{:.0f}", LAST->w, LAST->h) : "");
+        const bool RESIZED  = LAST && !ANOTHER && !RESERVED && (std::abs(LAST->w - SCREEN.w) > 0.5 || std::abs(LAST->h - SCREEN.h) > 0.5);
+        Log::info("screen change for workspace {}: {} {:.0f}x{:.0f}{}{}", WORKSPACE->m_name, ANOTHER ? "now on monitor" : "monitor", SCREEN.w, SCREEN.h,
+                  LAST ? std::format(", was {:.0f}x{:.0f}", LAST->w, LAST->h) : "", RESERVED ? " (its reserved space: a bar)" : "");
         if (RESIZED) {
             // Whatever was in the middle of the old screen stays in the middle of the new one.
             m_scrolled[WORKSPACE->m_name] = scrolledFor(WORKSPACE) - ((SCREEN.size() - LAST->size()) / 2.0).round();
@@ -443,8 +448,40 @@ namespace Expanse {
 
     void CCanvas::noteScreen(const PHLWORKSPACE& workspace, const CBox& screen) {
         m_lastScreens[workspace->m_name] = screen;
-        if (const auto MONITOR = workspace->m_monitor.lock())
+        const auto MONITOR = workspace->m_monitor.lock();
+        if (MONITOR)
             m_lastMonitors[workspace->m_name] = MONITOR->m_name;
+        if (MONITOR && !m_screenOverride)
+            m_lastMonitorBoxes[workspace->m_name] = {MONITOR->m_position, MONITOR->m_size};
+        else
+            m_lastMonitorBoxes.erase(workspace->m_name);
+    }
+
+    bool CCanvas::reservedOnly(const PHLWORKSPACE& workspace, const PHLMONITOR& monitor) const {
+        const auto IT = m_lastMonitorBoxes.find(workspace->m_name);
+        return monitor && !m_screenOverride && IT != m_lastMonitorBoxes.end() && IT->second.pos() == monitor->m_position && IT->second.size() == monitor->m_size;
+    }
+
+    void CCanvas::checkReserved(const PHLMONITOR& monitor) {
+        // Nothing says when a bar (a layer surface) takes space at the edge of
+        // a monitor or gives it back, as when a monitor plugged back in gets
+        // its bar a moment after the canvas was fitted to it: noticed here,
+        // before a frame, and fitted once the frame is out.
+        if (m_paused || live() || m_relayoutPending || m_reservedQueued || !monitor)
+            return;
+        const auto WORKSPACE = monitor->m_activeWorkspace;
+        if (!WORKSPACE || !Mode::isExpanse(WORKSPACE))
+            return;
+        const auto IT  = m_lastScreens.find(WORKSPACE->m_name);
+        const CBox NOW = usableAreaOf(monitor);
+        if (IT == m_lastScreens.end() || (IT->second.pos() == NOW.pos() && IT->second.size() == NOW.size()) || !reservedOnly(WORKSPACE, monitor))
+            return;
+        m_reservedQueued = true;
+        later([this, ref = PHLMONITORREF{monitor}] {
+            m_reservedQueued = false;
+            if (const auto MONITOR = ref.lock(); MONITOR && !m_paused && !live() && !m_relayoutPending)
+                relayoutOn(MONITOR);
+        });
     }
 
     void CCanvas::centreAfterResize(const PHLWORKSPACE& workspace) {
@@ -502,6 +539,7 @@ namespace Expanse {
     }
 
     void CCanvas::relayoutAll() {
+        m_relayoutPending = false;
         if (live()) {
             onScreenChanged(); // once the canvas is back at 100%
             return;

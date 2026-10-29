@@ -114,6 +114,7 @@ namespace Expanse {
         rename(m_fitted, renames);
         rename(m_lastScreens, renames);
         rename(m_lastMonitors, renames);
+        rename(m_lastMonitorBoxes, renames);
 
         // A window moved to another workspace (a bind, say) has its spot on
         // that workspace's canvas where it is now.

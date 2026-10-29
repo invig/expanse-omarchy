@@ -1276,6 +1276,21 @@ vm("hyprctl output create headless SWEEP-2")
 wait(3.5)
 back = real()[G]
 check("plugging it back in puts them back exactly", back == g, f"{g} -> {back}")
+
+# Omarchy's bar going (Super + Shift + Space) or coming back: the windows move
+# with the space below it, no recentring. (So does a monitor plugged back in
+# that gets its bar a moment after the canvas was fitted to it.)
+bar = test_monitor()["reserved"][1]
+here_before = {k: v for k, v in real().items() if client(k) and client(k)["workspace"]["name"] == WORKSPACE}
+vm(OMARCHY + "omarchy-toggle-bar")
+wait(2.5)
+gone_bar = test_monitor()["reserved"][1]
+moved = {k: v for k, v in real().items() if k in here_before}
+vm(OMARCHY + "omarchy-toggle-bar")
+wait(2.5)
+check("Omarchy's bar going moves the windows with the space below it, and back",
+      here_before and all(moved[k][1] == v[1] - (bar - gone_bar) and moved[k][0] == v[0] for k, v in here_before.items())
+      and {k: v for k, v in real().items() if k in here_before} == here_before, f"{bar}->{gone_bar}: {here_before} -> {moved}")
 vm("hyprctl output remove SWEEP-2")
 wait(2)
 W, H = layout()
