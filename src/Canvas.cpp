@@ -583,6 +583,8 @@ namespace Expanse {
         if (!m_paused)
             followWorkspaces();
         checkReserved(monitor);
+        if (!m_paused && !m_left.empty() && monitor->m_activeWorkspace && m_left.contains(monitor->m_activeWorkspace->m_name))
+            enterWorkspace(monitor->m_activeWorkspace);
         if (!live() || monitor != m_monitor.lock())
             return;
 
@@ -761,11 +763,13 @@ namespace Expanse {
         if (!m_paused) {
             // Tiled as it arrived: if the workspace takes another layout, or
             // Expanse is paused or unloaded, it tiles again.
-            SLookAt here{*this, WINDOW->m_workspace};
+            SLookAt    here{*this, WINDOW->m_workspace};
+            const bool KNOWN = tracked(WINDOW);
             noteOriginal(WINDOW);
             if (auto* entry = tracked(WINDOW)) {
                 entry->wasTiled = true;
-                entry->box      = BOX;
+                if (!KNOWN)
+                    entry->box = BOX;
             }
             scheduleSave();
         }
@@ -795,11 +799,69 @@ namespace Expanse {
         TARGET->warpPositionSize();
     }
 
+    void CCanvas::rememberCanvas(const PHLWORKSPACE& workspace, bool away) {
+        SLeft left{.scroll = scrolledFor(workspace), .fitted = m_fitted.contains(workspace->m_name) ? std::optional{m_fitted[workspace->m_name]} : std::nullopt, .away = away};
+        for (const auto& entry : m_originals) {
+            const auto WINDOW = entry.window.lock();
+            if (WINDOW && WINDOW->m_isMapped && WINDOW->m_workspace == workspace && !Fullscreen::controller()->isFullscreen(WINDOW))
+                left.windows.emplace_back(entry, canvasBox(WINDOW));
+        }
+        m_left[workspace->m_name] = std::move(left);
+    }
+
+    std::optional<CBox> CCanvas::spotBeforeLeaving(const PHLWINDOW& window) const {
+        const auto IT = window && window->m_workspace ? m_left.find(window->m_workspace->m_name) : m_left.end();
+        if (IT != m_left.end())
+            for (const auto& [entry, box] : IT->second.windows)
+                if (entry.window.lock() == window)
+                    return box;
+        return std::nullopt;
+    }
+
+    void CCanvas::enterWorkspace(const PHLWORKSPACE& workspace) {
+        // Back in Expanse: each window that was on the canvas goes back to its
+        // spot there, with the canvas's scroll, as if it had never left.
+        // Windows opened meanwhile stay where they are.
+        const auto IT = workspace ? m_left.find(workspace->m_name) : m_left.end();
+        if (IT == m_left.end() || !IT->second.away || !Mode::isExpanse(workspace))
+            return;
+        const SLeft LEFT = std::move(IT->second);
+        m_left.erase(IT);
+        m_scrolled[workspace->m_name] = LEFT.scroll;
+        if (LEFT.fitted)
+            m_fitted[workspace->m_name] = *LEFT.fitted;
+        int back = 0;
+        for (const auto& [entry, box] : LEFT.windows) {
+            const auto WINDOW = entry.window.lock();
+            if (!WINDOW || !WINDOW->m_isMapped || WINDOW->m_workspace != workspace || Fullscreen::controller()->isFullscreen(WINDOW))
+                continue;
+            if (auto* known = tracked(WINDOW))
+                *known = entry;
+            else
+                m_originals.push_back(entry);
+            // One still tiled floats there as the layout takes it (adoptTiled).
+            if (const auto TARGET = WINDOW->layoutTarget(); TARGET && TARGET->floating()) {
+                g_layoutManager->setTargetGeom(box, TARGET);
+                TARGET->warpPositionSize();
+            }
+            ++back;
+        }
+        Log::info("workspace {} back in Expanse: {} windows back to their spots on the canvas", workspace->m_name, back);
+        damage();
+        scheduleSave();
+    }
+
     void CCanvas::leaveWorkspace(const PHLWORKSPACE& workspace) {
         // The workspace took another layout: the canvas leaves it, what
-        // arrived tiled tiles again, and the rest stays in view.
+        // arrived tiled tiles again, and the rest stays in view. The canvas
+        // is kept, for when it comes back.
         if (live() && workspace == m_workspace.lock())
             reset();
+        // Kept already if its windows went to Omarchy's floating first.
+        if (const auto IT = m_left.find(workspace->m_name); IT != m_left.end() && !IT->second.away)
+            IT->second.away = true;
+        else
+            rememberCanvas(workspace, true);
         int dropped = 0, tiled = 0;
         std::erase_if(m_originals, [&](const STracked& entry) {
             const auto WINDOW = entry.window.lock();
@@ -839,6 +901,7 @@ namespace Expanse {
     std::vector<PHLWINDOW> CCanvas::releaseTiled(const PHLWORKSPACE& workspace) {
         if (live() && workspace == m_workspace.lock())
             reset();
+        rememberCanvas(workspace, false);
         std::vector<PHLWINDOW> released;
         std::erase_if(m_originals, [&](const STracked& entry) {
             const auto WINDOW = entry.window.lock();

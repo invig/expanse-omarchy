@@ -84,7 +84,7 @@ Hyprland's headers.
 | <kbd>Space</kbd> + drag, or middle-drag | Move around the canvas |
 | <kbd>Alt</kbd> + pinch in | Zoom out to every window, from anywhere |
 | Click empty desktop | Zoom out to every window |
-| Scroll or pinch on empty desktop | Start moving around the canvas from 100% |
+| Scroll or pinch on empty desktop | Start moving around the canvas from 100% (when the scroll stops, the view settles where fewer windows are cut off by the screen's edges) |
 | Drag on empty canvas, <kbd>Shift</kbd>-click, or <kbd>Super</kbd> + <kbd>A</kbd> | Select windows, then drag any of them to move the group |
 | Hold <kbd>Super</kbd> while dragging | Move without snapping |
 | <kbd>0</kbd> · <kbd>1</kbd> · <kbd>-</kbd> · <kbd>=</kbd> | Fit everything · 100% · zoom out · zoom in |
@@ -99,7 +99,8 @@ Hyprland's headers.
 **Workspaces** in Expanse each have a canvas of their own. The workspaces bar next to the
 minimap, at the bottom of the screen, shows them; click one to go there, or use Omarchy's
 workspace keys as usual. Switch a workspace to another layout and windows that arrived tiled tile
-again, the rest staying where they are on screen; switch it back and they float where they were.
+again, the rest staying where they are on screen; switch it back and every window goes back to its
+spot on the canvas.
 On a workspace in another layout, <kbd>Super</kbd> + arrows move the focus as Omarchy's keys do.
 
 **Full-screen windows** step out of full screen while you're zoomed out, back to their place among

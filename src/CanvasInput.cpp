@@ -353,7 +353,8 @@ namespace Expanse {
                     m_coast = {.velocity = moved / SPAN, .last = NOW, .active = true};
                     wantFrame();
                     damage();
-                }
+                } else if (live())
+                    scrollMayEnd(80); // no momentum to follow: the scroll is over
             }
             return live();
         }
@@ -384,9 +385,122 @@ namespace Expanse {
         const double   AMOUNT = -event.delta * (WHEEL ? WHEEL_PAN : 1.0);
         const Vector2D DELTA  = VERTICAL ? Vector2D{0.0, AMOUNT} : Vector2D{AMOUNT, 0.0};
         pan(DELTA);
-        if (FINGERS)
+        if (FINGERS) {
             m_coast.recent.emplace_back(std::chrono::steady_clock::now(), DELTA);
+            scrollMayEnd(0); // over when the fingers lift
+        } else
+            scrollMayEnd(250); // a wheel's ticks have no end: a pause is it
         return true;
+    }
+
+    void CCanvas::scrollMayEnd(int ms) {
+        // As the Mac's: a scroll that moved the view is over when its
+        // momentum ends, or the fingers lift with none to follow, or a wheel
+        // pauses. 0: not yet.
+        if (!g_pCompositor || !g_pCompositor->m_wlEventLoop)
+            return;
+        if (!m_scrollEndTimer)
+            m_scrollEndTimer = wl_event_loop_add_timer(
+                g_pCompositor->m_wlEventLoop,
+                [](void* data) {
+                    sc<CCanvas*>(data)->scrollEnded();
+                    return 0;
+                },
+                this);
+        wl_event_source_timer_update(m_scrollEndTimer, ms);
+    }
+
+    void CCanvas::scrollEnded() {
+        // A scroll at 100% that left windows cut off by the screen's edges:
+        // the view moves on a little, to where they're whole or out of sight.
+        if (!live() || m_state != STATE_OVERVIEW || m_animating || m_coast.active || std::abs(m_camera.scale - 1.0) > 0.001 || m_drag.kind != SDrag::DRAG_NONE)
+            return;
+        const SCamera TARGET = snappedCamera();
+        if (TARGET.origin.distance(m_camera.origin) < 0.5)
+            return;
+        Log::info("scroll ended: view snapped by {:.0f}, {:.0f}", m_camera.origin.x - TARGET.origin.x, m_camera.origin.y - TARGET.origin.y);
+        animateTo(TARGET, STATE_OVERVIEW, 0.25);
+    }
+
+    SCamera CCanvas::snappedCamera() const {
+        // The view at 100%, moved by the least that leaves the fewest windows
+        // cut off by the screen's edges, and at least one whole. Each move
+        // tried puts the edge of a window on screen a gap in from the
+        // screen's, which (windows being a gap apart) also takes the next one
+        // just out of sight, or centres a window with less than that to spare
+        // (one filling the screen, say). None further than half the screen:
+        // you scrolled here, so the view stays near.
+        const CBox        SCREEN = usableArea();
+        std::vector<CBox> frames;
+        for (const auto& window : canvasWindows())
+            if (!Fullscreen::controller()->isFullscreen(window))
+                frames.push_back(screenBox(window).translate(-SCREEN.pos()));
+        const CBox VIEW{0, 0, SCREEN.w, SCREEN.h};
+        const auto VISIBLE = [&](const CBox& r) { return r.intersection(VIEW); };
+        const auto SEEN    = [&](const CBox& r) {
+            const CBox V = VISIBLE(r);
+            return V.w > 0 && V.h > 0;
+        };
+        const auto WHOLE = [&](const CBox& r) { return r.x >= VIEW.x && r.y >= VIEW.y && r.x + r.w <= VIEW.w && r.y + r.h <= VIEW.h; };
+        std::vector<CBox> shown;
+        for (const auto& r : frames)
+            if (SEEN(r))
+                shown.push_back(r);
+        if (std::ranges::all_of(shown, WHOLE))
+            return m_camera;
+        const double G = Arrange::GAP;
+        // Moves along one side that line a window up with the screen (`from`, `to`: its edges).
+        const auto MOVES = [G](double from, double to, double length) {
+            const double SPARE = length - (to - from);
+            return SPARE < 2 * G ? std::vector<double>{G - from, length - G - to, SPARE / 2 - from} : std::vector<double>{G - from, length - G - to};
+        };
+        std::vector<double> xs{0}, ys{0};
+        for (const auto& r : shown) {
+            for (const double M : MOVES(r.x, r.x + r.w, VIEW.w))
+                if (std::abs(M) <= VIEW.w / 2)
+                    xs.push_back(M);
+            for (const double M : MOVES(r.y, r.y + r.h, VIEW.h))
+                if (std::abs(M) <= VIEW.h / 2)
+                    ys.push_back(M);
+        }
+        // How cut off a window is along one side: 0 whole or out of sight,
+        // 0.5 half on screen. One too big for the screen that way counts as whole.
+        const auto CUT = [](double visible, double length, double screen) {
+            if (length <= 0 || length > screen)
+                return 0.0;
+            const double F = std::max(0.0, std::min(visible / length, 1.0));
+            return std::min(F, 1 - F);
+        };
+        // Lower is better: none whole, then how much is cut off and how far the view moves.
+        const auto COST = [&](double dx, double dy) {
+            bool   whole = false;
+            double cuts  = 0;
+            for (const auto& r : frames) {
+                const CBox S = r.copy().translate({dx, dy});
+                // Out of sight, just touching the screen's edge included.
+                if (!SEEN(S))
+                    continue;
+                const CBox V = VISIBLE(S);
+                whole        = whole || WHOLE(S);
+                cuts += CUT(V.w, S.w, VIEW.w) + CUT(V.h, S.h, VIEW.h);
+            }
+            // Of two that leave as much cut off, the shorter move.
+            return std::pair{!whole, cuts + 0.5 * (std::abs(dx) / VIEW.w + std::abs(dy) / VIEW.h)};
+        };
+        double dxBest = 0, dyBest = 0;
+        auto   best   = COST(0, 0);
+        for (const double DX : xs) {
+            for (const double DY : ys) {
+                const auto C = COST(DX, DY);
+                if ((!C.first && best.first) || (C.first == best.first && C.second < best.second - 0.001)) {
+                    best   = C;
+                    dxBest = DX;
+                    dyBest = DY;
+                }
+            }
+        }
+        // Windows moving by (dx, dy) on screen is the view moving the other way.
+        return {(m_camera.origin - Vector2D{dxBest, dyBest} / m_camera.scale).round(), 1.0};
     }
 
     void CCanvas::coast() {
@@ -402,6 +516,7 @@ namespace Expanse {
         m_coast.velocity     = m_coast.velocity * std::pow(COAST_DECAY, SECONDS * 1000.0);
         if (m_coast.velocity.size() < COAST_MIN / 3) {
             stopCoasting();
+            scrollEnded();
             return;
         }
         // pan() would forget the way back, as for any pan; the camera moves here.

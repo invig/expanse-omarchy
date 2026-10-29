@@ -107,6 +107,10 @@ namespace Expanse {
         // again, and back.
         void                   adoptFloated(const PHLWORKSPACE& workspace);
         std::vector<PHLWINDOW> releaseTiled(const PHLWORKSPACE& workspace);
+        // A workspace back in Expanse after another layout: its canvas as it
+        // left it. And a window's spot then, for one that arrives tiled.
+        void                   enterWorkspace(const PHLWORKSPACE& workspace);
+        std::optional<CBox>    spotBeforeLeaving(const PHLWINDOW& window) const;
         void                   centreCurrent();
         bool                   pickAt(const Vector2D& pos); // a click at a global logical point
         bool                   switchTo(PHLWORKSPACE workspace); // the canvas comes along, zoomed out
@@ -221,6 +225,18 @@ namespace Expanse {
         CBox                   usableArea() const;
         CBox                   usableAreaOf(const PHLMONITOR& monitor) const;
         void                   leaveFloating(const STracked& entry); // a window the canvas leaves, floating
+        void                   rememberCanvas(const PHLWORKSPACE& workspace, bool away);
+
+        // A workspace's canvas as it was when it took another layout, for when
+        // it comes back to Expanse: each window's tracking and its box on
+        // screen then, and the canvas's scroll.
+        struct SLeft {
+            std::vector<std::pair<STracked, CBox>> windows;
+            Vector2D                               scroll;
+            std::optional<Vector2D>                fitted;
+            bool                                   away = false; // its layout has changed since (handing windows to Omarchy's floating comes first)
+        };
+        std::unordered_map<std::string, SLeft> m_left;
         bool                   onCanvasMonitor(const Vector2D& pos) const; // the canvas is up, and this is on its monitor
         SCamera                homeCamera() const;
         SCamera                fitCamera(double maxScale) const;
@@ -447,6 +463,10 @@ namespace Expanse {
         // Focus often bounces between windows for a moment (an app opening a
         // document, a window closing): keyboard focus is acted on once it settles.
         wl_event_source*       m_focusTimer = nullptr;
+        wl_event_source*       m_scrollEndTimer = nullptr;
+        void                   scrollMayEnd(int ms); // the scroll is over after this long without another
+        void                   scrollEnded();
+        SCamera                snappedCamera() const;
 
         // New windows off screen, waiting for one glide (see glideToArrival).
         std::vector<PHLWINDOWREF> m_arrivals;

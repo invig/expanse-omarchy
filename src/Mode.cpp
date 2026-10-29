@@ -108,6 +108,9 @@ namespace Expanse::Mode {
             CBox       box    = target->position();
             if (const auto BEFORE = WINDOW ? whereItWas(WINDOW) : std::nullopt)
                 box = *BEFORE;
+            // Back in Expanse after another layout, at its spot on the canvas then.
+            if (const auto SPOT = WINDOW ? g_canvas.spotBeforeLeaving(WINDOW) : std::nullopt)
+                box = *SPOT;
             // A new window has no box yet: until it floats, the size it asks
             // for, in the middle.
             if (box.w < 2 || box.h < 2) {

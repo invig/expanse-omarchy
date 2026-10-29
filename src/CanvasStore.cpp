@@ -148,7 +148,11 @@ namespace Expanse {
         m_saveTimer = nullptr;
         if (m_relayoutTimer)
             wl_event_source_remove(m_relayoutTimer);
-        m_relayoutTimer = nullptr;
+        m_relayoutTimer   = nullptr;
+        m_relayoutPending = false;
+        if (m_scrollEndTimer)
+            wl_event_source_remove(m_scrollEndTimer);
+        m_scrollEndTimer = nullptr;
         if (m_animationTimer)
             wl_event_source_remove(m_animationTimer);
         m_animationTimer = nullptr;

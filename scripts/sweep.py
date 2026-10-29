@@ -968,6 +968,7 @@ vm(f'hyprctl dispatch "hl.dsp.window.float({{ action = \\"unset\\", window = \\"
 wait(1.5)
 check("a window tiled on an Expanse workspace floats on the canvas", tiled(T1) is False, tiled(T1))
 focus(T1)
+spot = real()[T1]
 qmp("key", "meta_l+l", "sleep", 2500)
 rest = [c["floating"] for c in clients() if c["class"].endswith(RUN) and c["class"] != T1 and c["workspace"]["name"] == WORKSPACE]
 check("Super + L takes the workspace to tiling: what arrived tiled tiles, the rest stays floating", layout_of(WORKSPACE) == "dwindle" and tiled(T1) is True and rest and all(rest),
@@ -986,8 +987,9 @@ check("Super + arrows there move the focus as Hyprland's own keys do", active() 
 was = {k: v for k, v in real().items() if k in (T1, T2)}
 qmp("key", "meta_l+alt+l", "sleep", 2500)
 now = {k: v for k, v in real().items() if k in (T1, T2)}
-check("Super + Alt + L back to Expanse: the tiled windows float where they were", layout_of(WORKSPACE) == "expanse" and tiled(T1) is False and tiled(T2) is False and now == was,
-      f"{layout_of(WORKSPACE)} {was} -> {now}")
+check("Super + Alt + L back to Expanse: each window back to its spot on the canvas, one opened meanwhile floating where it was",
+      layout_of(WORKSPACE) == "expanse" and tiled(T1) is False and tiled(T2) is False and now.get(T1) == spot and now.get(T2) == was.get(T2),
+      f"{layout_of(WORKSPACE)} {T1}: {spot} -> {now.get(T1)}, {T2}: {was.get(T2)} -> {now.get(T2)}")
 for app in (T1, T2):
     vm(f"kill {client(app)['pid']}")
 wait(1)
@@ -1590,13 +1592,14 @@ focus(P2)
 settle()
 spot = empty_spot(ctl(), avoid_corner=True)
 point(*spot)
-qmp("wheel", "down", 3, "sleep", 700)  # the first notch opens the canvas at 100%, the rest pan
-check("scrolling at 100% puts the view where you want it", ctl()["viewPlaced"] is True)
 glides = ctl()["glides"]
 partly = client(P1)["at"]
-point(partly[0] + 360, partly[1] + 220)
-qmp("click", "sleep", 1500)
+# The first notch opens the canvas at 100%, the other two pan it 120 px; the
+# click comes before the scroll's snap (a quarter of a second after the last
+# notch), which would bring the window whole into view.
+qmp("wheel", "down", 3, "sleep", 60, "move", partly[0] + 360, partly[1] + 220 - 120, W, H, "sleep", 40, "click", "sleep", 1500)
 settle()
+check("scrolling at 100% puts the view where you want it", ctl()["viewPlaced"] is True)
 check("after you pan at 100%, diving into a window you can see focuses it where it is",
       active() == P1 and ctl()["glides"] == glides + 1 and client(P1)["at"][0] < OX, f"{active()} {client(P1)['at']}")
 focus(P2)
@@ -1607,6 +1610,45 @@ point(partly[0] + 360, partly[1] + 220)
 qmp("click", "sleep", 1500)
 check("and so does a click at 100%, until the next glide", active() == P1 and ctl()["glides"] == glides and client(P1)["at"][0] < OX, f"{active()} {ctl()['glides'] - glides}")
 ctl(f"focus {P2}")
+settle()
+
+# A scroll at 100% snaps when it stops: the view moves on a little, to where
+# fewer windows are cut off by the screen's edges.
+def cut_off(state):
+    m = test_monitor()
+    left, top, right, bottom = m["reserved"]
+    x0, y0 = m["x"] + left, m["y"] + top
+    w0, h0 = m["width"] / m["scale"] - left - right, m["height"] / m["scale"] - top - bottom
+    total = 0
+    for w in state["windows"]:
+        x, y, ww, hh = w["screen"]
+        vx, vy = min(x + ww, x0 + w0) - max(x, x0), min(y + hh, y0 + h0) - max(y, y0)
+        if vx <= 0 or vy <= 0:
+            continue
+        for v, length, screen in ((vx, ww, w0), (vy, hh, h0)):
+            if 0 < length <= screen:
+                f = max(0, min(v / length, 1))
+                total += min(f, 1 - f)
+    return total
+
+
+S1, S2 = f"sweep-s1-{RUN}", f"sweep-s2-{RUN}"
+APPS += [S1, S2]
+ctl(f"focus {P2}")
+settle()
+top = test_monitor()["y"] + test_monitor()["reserved"][1]
+for app, y in ((S1, top + 20), (S2, top + 340)):
+    open_app(app, "480 300")
+    vm(f'hyprctl dispatch "hl.dsp.window.move({{ x = {int(OX + MW / 2 - 240)}, y = {int(y)}, window = \\"class:{app}\\" }})"')
+    wait(0.8)
+settle()
+point(*empty_spot(ctl()))
+qmp("wheel", "down", 1, "sleep", 400, "wheel", "down", 2, "sleep", 60)  # opens the canvas at 100%, then 120 px
+before = cut_off(ctl())
+wait(1.5)
+check("a scroll at 100% snaps when it stops, leaving fewer windows cut off by the screen's edges",
+      "scroll ended: view snapped" in vm("hyprctl expanse log") and cut_off(ctl()) < before - 0.001 and ctl()["scale"] == 1, f"{before:.3f} -> {cut_off(ctl()):.3f}")
+qmp("key", "esc")
 settle()
 
 # Expanse's log names windows by app, never by title; the bug report is ready for GitHub.
