@@ -115,6 +115,7 @@ namespace Expanse {
         rename(m_lastScreens, renames);
         rename(m_lastMonitors, renames);
         rename(m_lastMonitorBoxes, renames);
+        rename(m_left, renames);
 
         // A window moved to another workspace (a bind, say) has its spot on
         // that workspace's canvas where it is now.
@@ -204,6 +205,28 @@ namespace Expanse {
                 .address   = reinterpret_cast<uint64_t>(WINDOW.get()),
                 .pid       = WINDOW->getPID(),
             });
+        }
+        // Workspaces in another layout keep their canvas (see enterWorkspace),
+        // across a reload too.
+        for (const auto& [name, left] : m_left) {
+            layout.away.push_back(name);
+            for (const auto& [entry, box] : left.windows) {
+                const auto WINDOW = entry.window.lock();
+                if (!WINDOW || !WINDOW->m_isMapped || tracked(WINDOW))
+                    continue;
+                layout.windows.push_back({
+                    .app       = WINDOW->m_initialClass,
+                    .title     = Store::titleKey(WINDOW->m_initialTitle),
+                    .workspace = name,
+                    .frame     = box.copy().translate(left.scroll),
+                    .wasTiled  = entry.wasTiled,
+                    .original  = entry.box,
+                    .preferred = entry.preferred,
+                    .home      = entry.home,
+                    .address   = reinterpret_cast<uint64_t>(WINDOW.get()),
+                    .pid       = WINDOW->getPID(),
+                });
+            }
         }
         // Windows that aren't open keep their saved spots.
         for (size_t i = 0; i < std::min(m_pool.size(), SAVED_CLOSED); ++i)
@@ -333,6 +356,17 @@ namespace Expanse {
                 rest.push_back(window);
         for (const auto& window : rest)
             placeFromSaved(window, false);
+
+        // Workspaces that were in another layout keep their canvas for when
+        // they come back to Expanse: their windows' spots stay in the pool.
+        for (const auto& name : LAYOUT->away) {
+            bool expanse = false;
+            for (const auto& ref : State::workspaceState()->workspaces())
+                if (const auto W = ref.lock(); W && W->m_name == name)
+                    expanse = Mode::isExpanse(W);
+            if (!expanse)
+                m_left[name] = {.away = true, .fromStore = true};
+        }
 
         // Back where you last saw them, moved only if the screen differs from
         // the one the layout was fitted to.

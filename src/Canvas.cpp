@@ -827,10 +827,22 @@ namespace Expanse {
             return;
         const SLeft LEFT = std::move(IT->second);
         m_left.erase(IT);
+        int back = 0;
+        if (LEFT.fromStore) {
+            // Kept across a reload: its windows' spots are in the saved layout,
+            // found by their exact address (the scroll came back with it).
+            for (const auto& window : Desktop::windowState()->windows())
+                if (window->m_isMapped && window->m_workspace == workspace && !window->m_pinned && !Fullscreen::controller()->isFullscreen(window) &&
+                    placeFromSaved(window, true))
+                    ++back;
+            Log::info("workspace {} back in Expanse: {} windows back to their saved spots on the canvas", workspace->m_name, back);
+            damage();
+            scheduleSave();
+            return;
+        }
         m_scrolled[workspace->m_name] = LEFT.scroll;
         if (LEFT.fitted)
             m_fitted[workspace->m_name] = *LEFT.fitted;
-        int back = 0;
         for (const auto& [entry, box] : LEFT.windows) {
             const auto WINDOW = entry.window.lock();
             if (!WINDOW || !WINDOW->m_isMapped || WINDOW->m_workspace != workspace || Fullscreen::controller()->isFullscreen(WINDOW))
@@ -877,8 +889,6 @@ namespace Expanse {
             return true;
         });
         Log::info("workspace {} took another layout: dropped {} windows, {} tiled again", workspace->m_name, dropped, tiled);
-        m_scrolled.erase(workspace->m_name);
-        m_fitted.erase(workspace->m_name);
         scheduleSave();
     }
 
@@ -912,7 +922,6 @@ namespace Expanse {
             leaveFloating(entry);
             return true;
         });
-        m_scrolled.erase(workspace->m_name);
         Log::info("workspace {} to Omarchy's floating: {} windows handed over where they are", workspace->m_name, released.size());
         scheduleSave();
         return released;

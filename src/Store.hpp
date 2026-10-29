@@ -36,6 +36,7 @@ namespace Expanse::Store {
     struct SLayout {
         std::vector<std::pair<std::string, Vector2D>> scrolled; // per workspace
         std::vector<std::pair<std::string, Vector2D>> fitted;   // per workspace, the screen size it was fitted to
+        std::vector<std::string>                      away;     // workspaces in another layout, their canvas kept (in `windows`)
         bool                                          autoCentre = true;
         // Choices from the menu; without one, the config value.
         std::optional<std::string>                    hotCorner;

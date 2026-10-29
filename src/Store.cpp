@@ -50,6 +50,10 @@ namespace Expanse::Store {
             for (const auto& entry : *SCROLLED)
                 if (const auto WS = entry.string("workspace"); WS && entry.number("x") && entry.number("y"))
                     layout.scrolled.emplace_back(*WS, Vector2D{*entry.number("x"), *entry.number("y")});
+        if (const auto* AWAY = ROOT->array("away"))
+            for (const auto& entry : *AWAY)
+                if (const auto WS = entry.string("workspace"))
+                    layout.away.push_back(*WS);
         if (const auto* FITTED = ROOT->array("fitted"))
             for (const auto& entry : *FITTED)
                 if (const auto WS = entry.string("workspace"); WS && entry.number("w") && entry.number("h"))
@@ -97,6 +101,9 @@ namespace Expanse::Store {
         for (size_t i = 0; i < layout.scrolled.size(); ++i)
             out += std::format("{}\n    {{\"workspace\": {}, \"x\": {}, \"y\": {}}}", i ? "," : "", Json::quote(layout.scrolled[i].first), layout.scrolled[i].second.x,
                                layout.scrolled[i].second.y);
+        out += "\n  ],\n  \"away\": [";
+        for (size_t i = 0; i < layout.away.size(); ++i)
+            out += std::format("{}\n    {{\"workspace\": {}}}", i ? "," : "", Json::quote(layout.away[i]));
         out += "\n  ],\n  \"fitted\": [";
         for (size_t i = 0; i < layout.fitted.size(); ++i)
             out += std::format("{}\n    {{\"workspace\": {}, \"w\": {}, \"h\": {}}}", i ? "," : "", Json::quote(layout.fitted[i].first), layout.fitted[i].second.x,

@@ -985,9 +985,12 @@ glides = ctl()["glides"]
 qmp("key", "meta_l+right", "sleep", 1200)
 check("Super + arrows there move the focus as Hyprland's own keys do", active() != T1 and ctl()["glides"] == glides and ctl()["state"] == "idle", f"{active()} {ctl()['glides'] - glides}")
 was = {k: v for k, v in real().items() if k in (T1, T2)}
+# The canvas it left is kept with the saved layout: a reload meanwhile changes nothing.
+vm("hyprctl plugin unload ~/expanse-hypr/expanse.so; hyprctl plugin load ~/expanse-hypr/expanse.so")
+wait(3)
 qmp("key", "meta_l+alt+l", "sleep", 2500)
 now = {k: v for k, v in real().items() if k in (T1, T2)}
-check("Super + Alt + L back to Expanse: each window back to its spot on the canvas, one opened meanwhile floating where it was",
+check("Super + Alt + L back to Expanse, after a reload: each window back to its spot on the canvas, one opened meanwhile floating where it was",
       layout_of(WORKSPACE) == "expanse" and tiled(T1) is False and tiled(T2) is False and now.get(T1) == spot and now.get(T2) == was.get(T2),
       f"{layout_of(WORKSPACE)} {T1}: {spot} -> {now.get(T1)}, {T2}: {was.get(T2)} -> {now.get(T2)}")
 for app in (T1, T2):

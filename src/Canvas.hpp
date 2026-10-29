@@ -235,6 +235,7 @@ namespace Expanse {
             Vector2D                               scroll;
             std::optional<Vector2D>                fitted;
             bool                                   away = false; // its layout has changed since (handing windows to Omarchy's floating comes first)
+            bool                                   fromStore = false; // kept across a reload: its windows' spots are in the saved layout
         };
         std::unordered_map<std::string, SLeft> m_left;
         bool                   onCanvasMonitor(const Vector2D& pos) const; // the canvas is up, and this is on its monitor
