@@ -1,6 +1,7 @@
 #define WLR_USE_UNSTABLE
 
 #include "Log.hpp"
+#include "StateDir.hpp"
 
 #include <hyprland/src/debug/log/Logger.hpp>
 
@@ -8,7 +9,6 @@
 #include <cstdlib>
 #include <deque>
 #include <filesystem>
-#include <fstream>
 
 namespace Expanse::Log {
 
@@ -31,13 +31,17 @@ namespace Expanse::Log {
     }
 
     static void toFile(const std::string& stamped) {
-        std::error_code error;
-        std::filesystem::create_directories(dir(), error);
-        const auto PATH = std::filesystem::path{filePath()};
+        const auto DIR = StateDir::open(dir());
+        if (!DIR)
+            return;
+        auto        file = StateDir::openFile(DIR.get(), "expanse.log", O_APPEND);
+        struct stat st {};
         // Over the cap, the older half is kept beside it, as on the Mac.
-        if (std::filesystem::exists(PATH, error) && std::filesystem::file_size(PATH, error) > MAX_BYTES)
-            std::filesystem::rename(PATH, dir() / "expanse.1.log", error);
-        std::ofstream(PATH, std::ios::app) << stamped << '\n';
+        if (file && ::fstat(file.get(), &st) == 0 && static_cast<uint64_t>(st.st_size) > MAX_BYTES &&
+            ::renameat(DIR.get(), "expanse.log", DIR.get(), "expanse.1.log") == 0)
+            file = StateDir::openFile(DIR.get(), "expanse.log", O_APPEND);
+        if (file)
+            StateDir::writeAll(file.get(), stamped + '\n');
     }
 
     static std::string stamp() {

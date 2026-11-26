@@ -357,7 +357,7 @@ cmd_everywhere() {
   before=$(workspace_modes)
   if [[ ${1:-on} == on ]]; then
     [[ $(omarchy-hyprland-workspace-layout-default) == expanse ]] && return 0
-    mkdir -p "$STATE"
+    mkdir -p -m 700 "$STATE"
     if [[ -f $MODES/default.lua ]]; then cp "$MODES/default.lua" "$BEFORE"; else rm -f "$BEFORE"; fi
     # Each workspace first, from the mode it has, so its windows stay put.
     while read -r workspace current; do

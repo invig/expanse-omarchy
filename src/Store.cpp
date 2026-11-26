@@ -1,5 +1,6 @@
 #include "Store.hpp"
 #include "Json.hpp"
+#include "StateDir.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -126,26 +127,14 @@ namespace Expanse::Store {
         return out;
     }
 
-    static void write(const std::string& text, const std::filesystem::path& to) {
-        // Written aside and renamed into place, so a crash never leaves half a file.
-        std::error_code error;
-        std::filesystem::create_directories(to.parent_path(), error);
-        const auto TEMP = to.string() + ".next";
-        {
-            std::ofstream stream{TEMP, std::ios::trunc};
-            if (!stream)
-                return;
-            stream << text;
-        }
-        std::filesystem::rename(TEMP, to, error);
-    }
-
     bool save(const SLayout& layout) {
         static std::string last;
         auto               text = encode(layout);
         if (text == last)
             return false;
-        write(text, path());
+        const auto FILE = path();
+        if (const auto DIR = StateDir::open(FILE.parent_path()))
+            StateDir::replace(DIR.get(), FILE.filename().string(), text);
         last = std::move(text);
         return true;
     }
@@ -165,7 +154,10 @@ namespace Expanse::Store {
 
     void saveSnapshot(const SLayout& layout) {
         const auto NOW = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-        write(encode(layout), snapshotFolder() / std::format("{}.json", NOW));
+        const auto FOLDER = snapshotFolder();
+        if (const auto DIR = StateDir::open(FOLDER.parent_path()))
+            if (const auto SNAPSHOTS = StateDir::openAt(DIR.get(), FOLDER.filename().c_str()))
+                StateDir::replace(SNAPSHOTS.get(), std::format("{}.json", NOW), encode(layout));
         const auto ALL = snapshots();
         std::error_code error;
         for (size_t i = SNAPSHOTS_KEPT; i < ALL.size(); ++i)
