@@ -26,9 +26,10 @@ clean:
 	rm -rf $(OUT) $(OUT).next .build
 
 .PHONY: test
-test: .build/nearest_test .build/store_test
+test: .build/nearest_test .build/store_test .build/permissions_test
 	.build/nearest_test
 	.build/store_test
+	.build/permissions_test
 
 .build/nearest_test: tests/nearest_test.cpp src/Nearest.cpp src/Nearest.hpp
 	@mkdir -p .build
@@ -37,3 +38,7 @@ test: .build/nearest_test .build/store_test
 .build/store_test: tests/store_test.cpp src/Store.cpp src/Store.hpp src/Json.cpp src/Json.hpp
 	@mkdir -p .build
 	$(CXX) -std=c++2b -O1 -g tests/store_test.cpp src/Store.cpp src/Json.cpp -o $@ `pkg-config --cflags --libs hyprutils`
+
+.build/permissions_test: tests/permissions_test.cpp tests/support/hyprland/src/debug/log/Logger.hpp src/Store.cpp src/Store.hpp src/Json.cpp src/Json.hpp src/Log.cpp src/Log.hpp
+	@mkdir -p .build
+	$(CXX) -std=c++2b -O1 -g tests/permissions_test.cpp src/Store.cpp src/Json.cpp src/Log.cpp -o $@ -I tests/support `pkg-config --cflags --libs hyprutils`
