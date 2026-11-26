@@ -50,6 +50,41 @@ namespace Expanse {
         return g_pInputManager->getModsFromAllKBs();
     }
 
+    // The binds that must keep working on the canvas: examples/expanse.lua's
+    // overview toggle, hops (which chain mid-glide), centre and auto-centre,
+    // and Omarchy's workspace keys, which bring the canvas along. Every other
+    // chord is swallowed, since keyboard focus stays with the window you were
+    // in and Hyprland would hand it an unbound one.
+    struct SCanvasBind {
+        uint32_t mods;
+        uint32_t keycode;
+    };
+    constexpr SCanvasBind CANVAS_BINDS[] = {
+        {HL_MODIFIER_ALT, KEY_GRAVE},
+        {HL_MODIFIER_ALT | HL_MODIFIER_SHIFT, KEY_GRAVE},
+        {HL_MODIFIER_META, KEY_LEFT},
+        {HL_MODIFIER_META, KEY_RIGHT},
+        {HL_MODIFIER_META, KEY_UP},
+        {HL_MODIFIER_META, KEY_DOWN},
+        {HL_MODIFIER_CTRL | HL_MODIFIER_ALT, KEY_C},
+        {HL_MODIFIER_META, KEY_1},
+        {HL_MODIFIER_META, KEY_2},
+        {HL_MODIFIER_META, KEY_3},
+        {HL_MODIFIER_META, KEY_4},
+        {HL_MODIFIER_META, KEY_5},
+        {HL_MODIFIER_META, KEY_6},
+        {HL_MODIFIER_META, KEY_7},
+        {HL_MODIFIER_META, KEY_8},
+        {HL_MODIFIER_META, KEY_9},
+        {HL_MODIFIER_META, KEY_0},
+    };
+
+    // Exact, as Hyprland matches a bind's modmask: a chord it won't take as
+    // the bind would go on to the window.
+    static bool canvasBind(uint32_t keycode, uint32_t mods) {
+        return std::ranges::any_of(CANVAS_BINDS, [&](const SCanvasBind& bind) { return bind.mods == mods && bind.keycode == keycode; });
+    }
+
     static Vector2D pointer() {
         return g_pInputManager->getMouseCoordsInternal();
     }
@@ -622,8 +657,7 @@ namespace Expanse {
             return true;
         }
 
-        // Other chords stay keybinds: the toggle, hops (which chain mid-glide).
-        if (MODS & (HL_MODIFIER_META | HL_MODIFIER_ALT | HL_MODIFIER_CTRL))
+        if (canvasBind(keycode, MODS))
             return false;
 
         m_swallowedKeys.push_back(keycode);
