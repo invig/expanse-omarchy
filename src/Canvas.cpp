@@ -173,13 +173,10 @@ namespace Expanse {
 
     bool isDialog(const PHLWINDOW& window) {
         // The canvas never covers these, as on the Mac it never covers
-        // another app's dialog: a dialog, a password prompt (a polkit agent's,
-        // pinentry's, the keyring's), or a window pinned above every other.
-        if (window->parent() || window->isModal() || window->m_pinned)
-            return true;
-        std::string app = window->m_initialClass;
-        std::ranges::transform(app, app.begin(), [](unsigned char c) { return std::tolower(c); });
-        return app.contains("polkit") || app.contains("pinentry") || app == "gcr-prompter";
+        // another app's dialog: a dialog, or a window pinned above every other.
+        // Never the app id or X11 class: any client picks its own, so naming
+        // itself after a password agent must not earn it the keyboard.
+        return window->parent() || window->isModal() || window->m_pinned;
     }
 
     std::optional<eDirection> parseDirection(const std::string& text) {
@@ -709,7 +706,7 @@ namespace Expanse {
             m_dialog = dialog;
             return;
         }
-        Log::info("making way for {}: a dialog, prompt or pinned window opened with the canvas up", logName(dialog));
+        Log::info("making way for {}: a dialog or pinned window opened with the canvas up", logName(dialog));
         if (isCanvasWindow(dialog))
             glideTo(dialog, false);
         else

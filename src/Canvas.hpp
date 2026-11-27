@@ -43,7 +43,7 @@ namespace Expanse {
     std::optional<eDirection> parseDirection(const std::string& text);
     std::string               appName(const PHLWINDOW& window); // "org.gnome.Nautilus" → "Nautilus"
     bool                      sizesItself(const PHLWINDOW& window); // a VM's or remote screen's window: never resized
-    bool                      isDialog(const PHLWINDOW& window);    // a dialog, a password prompt, or pinned above the rest
+    bool                      isDialog(const PHLWINDOW& window);    // a dialog (modal, or a child) or pinned above the rest
     std::string               logName(const PHLWINDOW& window);     // app[address], for the log: never its title
 
     // The bottom-right overview on the canvas: every window as a block, the
