@@ -25,10 +25,20 @@ $(OUT): $(SOURCES) $(HEADERS)
 clean:
 	rm -rf $(OUT) $(OUT).next .build
 
-.PHONY: test
+.PHONY: test focus-theft-test
 test: .build/nearest_test .build/store_test
 	.build/nearest_test
 	.build/store_test
+
+# Fails while a client-chosen app id is treated as a password prompt.
+# Needs no Hyprland install: tests/support stands in for 0.56.2.
+FOCUS_SOURCES = src/Canvas.cpp src/CanvasInput.cpp src/CanvasScreen.cpp src/CanvasSpaces.cpp src/CanvasStore.cpp src/HotCorner.cpp src/Later.cpp src/Log.cpp src/Mode.cpp src/Arrange.cpp src/Nearest.cpp src/Store.cpp src/Json.cpp
+.build/focus_theft_test: tests/focus_theft_test.cpp $(FOCUS_SOURCES) $(HEADERS) tests/support/include/expanse_test_world.hpp
+	@mkdir -p .build
+	$(CXX) -std=c++2b -O1 -g -I tests/support/include tests/focus_theft_test.cpp $(FOCUS_SOURCES) -o $@ -lwayland-server -ldl
+
+focus-theft-test: .build/focus_theft_test
+	.build/focus_theft_test
 
 .build/nearest_test: tests/nearest_test.cpp src/Nearest.cpp src/Nearest.hpp
 	@mkdir -p .build
