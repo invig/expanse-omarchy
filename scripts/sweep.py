@@ -1576,11 +1576,13 @@ settle()
 vm(f"kill {client(PIN)['pid']}")
 wait(1)
 
-# A password prompt (or dialog) opening while zoomed out brings you back to it.
+# A window that names itself after a password agent is not taken for one:
+# zoomed out, the canvas keeps the keyboard.
 zoom_out()
 open_app(PROMPT, "500 260")
 wait(1)
-check("a password prompt opening while zoomed out brings you back to it", ctl()["state"] == "idle" and active() == PROMPT, f"{ctl()['state']} {active()}")
+check("an app id naming a password agent does not bring you back to it", ctl()["state"] == "overview", f"{ctl()['state']} {active()}")
+qmp("key", "esc")
 settle()
 vm(f"kill {client(PROMPT)['pid']}")
 wait(1)
