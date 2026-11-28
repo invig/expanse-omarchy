@@ -48,7 +48,6 @@ namespace Expanse {
     constexpr double HOP_SECONDS        = 0.30; // at 100%
     constexpr double PAN_SECONDS        = 0.25; // on the canvas, following the highlight
     constexpr int    BACK_FROM_FULLSCREEN_MS = 400; // for Hyprland to put a window back in its box
-    constexpr auto   BURST              = std::chrono::seconds(3); // an app's windows opening together (a session coming back)
     constexpr int    ARRIVALS_MS        = 250; // new windows opening one after another count as one arrival
     constexpr double FIT_INSET          = 80.0; // canvas px around everything, when fitting
     constexpr double MIN_SCALE          = 0.03;
@@ -833,7 +832,7 @@ namespace Expanse {
             // found by their exact address (the scroll came back with it).
             for (const auto& window : Desktop::windowState()->windows())
                 if (window->m_isMapped && window->m_workspace == workspace && !window->m_pinned && !Fullscreen::controller()->isFullscreen(window) &&
-                    placeFromSaved(window, true))
+                    placeFromSaved(window))
                     ++back;
             Log::info("workspace {} back in Expanse: {} windows back to their saved spots on the canvas", workspace->m_name, back);
             damage();
@@ -1033,20 +1032,6 @@ namespace Expanse {
             !Mode::isExpanse(window->m_workspace))
             return;
 
-        // An app's first window, or one opening in a burst with it (a browser
-        // bringing its session back), may be one back from last time, with a
-        // saved spot. Apps here seldom bring windows back, so one opened later,
-        // with others of its app open, is new: a second terminal goes beside
-        // the first, not to where some old terminal was.
-        const auto NOW   = std::chrono::steady_clock::now();
-        const bool ALONE = std::ranges::none_of(Desktop::windowState()->windows(), [&](const PHLWINDOW& other) {
-            return other != window && other->m_isMapped && other->m_initialClass == window->m_initialClass;
-        });
-        auto&      last  = m_appOpened[window->m_initialClass];
-        if (!ALONE && NOW - last > BURST)
-            m_fresh.emplace_back(window);
-        last = NOW;
-
         // On its own workspace, showing or not (a rule or an app can open it
         // on another). With the canvas up on another workspace there's no
         // view there to open it beside; it waits (placeNewWindow).
@@ -1078,8 +1063,6 @@ namespace Expanse {
 
         SLookAt    here{*this, window->m_workspace};
         const bool SHOWING = window->m_workspace->isVisible();
-        const bool FRESH   = std::ranges::any_of(m_fresh, [&](const PHLWINDOWREF& ref) { return ref.lock() == window; });
-        std::erase_if(m_fresh, [&](const PHLWINDOWREF& ref) { return !ref.lock() || ref.lock() == window; });
         // One that waited (opened mid-glide) goes beside its source as it is now.
         if (!anchor)
             anchor = sourceOf(window);
@@ -1089,20 +1072,8 @@ namespace Expanse {
         if (window->m_group && window->m_group->size() > 1)
             return;
 
-        // A window that had a spot last time (an app opened again, or after a
-        // restart, on any workspace) goes back to it.
-        if (placeFromSaved(window, FRESH)) {
-            Log::info("back to its spot: {}", logName(window));
-            // Its spot was for the screen it closed on: fitted to this one
-            // from its home spot, the rest staying where they are.
-            if (isCanvasWindow(window))
-                fitLayoutToScreen(false, std::vector<PHLWINDOW>{window});
-            scheduleSave();
-            if (SHOWING && isCanvasWindow(window) && !live() && !fullyVisible(window))
-                glideToArrival(window);
-            return;
-        }
-
+        // A new window is a new client: a spot saved for a closed window is
+        // never given to it, even with the same app id (an app picks its own).
         if (!isCanvasWindow(window))
             return;
 
@@ -1250,14 +1221,13 @@ namespace Expanse {
         for (const auto& entry : LAYOUT->windows)
             if (entry.workspace == WORKSPACE->m_name)
                 pool.push_back(entry);
-        std::set<uint64_t> open;
-        for (const auto& window : Desktop::windowState()->windows())
-            open.insert(reinterpret_cast<uint64_t>(window.get()));
 
         noteSizes();
         for (const auto& window : WINDOWS) {
             noteOriginal(window);
-            const auto MATCH = Store::takeMatch(window->m_initialClass, window->m_initialTitle, reinterpret_cast<uint64_t>(window.get()), window->getPID(), open, pool);
+            // Only the window the snapshot saved: windows opened since stay where they are.
+            const auto MATCH =
+                Store::takeMatch(window->m_initialClass, window->m_initialTitle, reinterpret_cast<uint64_t>(window.get()), window->getPID(), {}, pool, window->m_stableID);
             auto*      entry = tracked(window);
             if (!MATCH || !entry)
                 continue;
