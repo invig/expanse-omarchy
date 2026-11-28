@@ -27,10 +27,13 @@ namespace Expanse::Store {
         // those sizes): windows shrink to fit a smaller screen and grow back.
         std::optional<Vector2D> preferred;
         std::optional<Vector2D> home;
-        // While the app keeps running (Hyprland or the plugin reloaded), these
-        // identify the window exactly, even among windows with the same title.
+        // While the window stays open (the plugin reloaded), these identify it
+        // exactly; an entry is only ever given back to that window. `id` is
+        // Hyprland's stable window ID, never reused while it runs: a closed
+        // window's address (and its process's pid) can come back for another.
         uint64_t            address = 0;
         int64_t             pid     = 0;
+        uint64_t            id      = 0;
     };
 
     struct SLayout {
@@ -70,10 +73,14 @@ namespace Expanse::Store {
     // to read the title.
     std::string titleKey(const std::string& title);
 
-    // The saved entry for a window: the same window (same address in the same
-    // process), then same app and title, then same app. A matched entry leaves
-    // the pool so two windows never claim one spot, and `open` (addresses of
-    // windows open now) keeps the fallbacks off entries another open window owns.
+    // Whether the entry was saved for this very window: same address, process,
+    // app and stable ID. An app chooses its own app id and title, so neither
+    // alone (nor together) says a window is the one that had the spot.
+    bool owns(const SWindow& entry, const std::string& app, uint64_t address, int64_t pid, uint64_t id = 0);
+
+    // The saved entry that window owns (see owns), and only that: no entry is
+    // handed to another window by app or title. A matched entry leaves the
+    // pool. `title` and `open` no longer take part in the match.
     std::optional<SWindow> takeMatch(const std::string& app, const std::string& title, uint64_t address, int64_t pid, const std::set<uint64_t>& open,
-                                     std::vector<SWindow>& pool);
+                                     std::vector<SWindow>& pool, uint64_t id = 0);
 }
