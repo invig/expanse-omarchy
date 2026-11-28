@@ -74,6 +74,7 @@ namespace Expanse::Store {
                     .home      = entry.number("hx") && entry.number("hy") ? std::optional{Vector2D{*entry.number("hx"), *entry.number("hy")}} : std::nullopt,
                     .address   = static_cast<uint64_t>(entry.number("address").value_or(0)),
                     .pid       = static_cast<int64_t>(entry.number("pid").value_or(0)),
+                    .id        = static_cast<uint64_t>(entry.number("id").value_or(0)),
                 });
             }
         return layout;
@@ -120,7 +121,7 @@ namespace Expanse::Store {
             if (W.home)
                 out += std::format(", \"hx\": {}, \"hy\": {}", W.home->x, W.home->y);
             // Addresses stay below 2^53 on 64-bit Linux, so a JSON number holds them exactly.
-            out += std::format(", \"address\": {}, \"pid\": {}}}", W.address, W.pid);
+            out += std::format(", \"address\": {}, \"pid\": {}, \"id\": {}}}", W.address, W.pid, W.id);
         }
         out += "\n  ]\n}\n";
         return out;
@@ -184,24 +185,17 @@ namespace Expanse::Store {
         return std::format("fnv1a:{:016x}", hash);
     }
 
-    std::optional<SWindow> takeMatch(const std::string& app, const std::string& title, uint64_t address, int64_t pid, const std::set<uint64_t>& open,
-                                     std::vector<SWindow>& pool) {
-        const auto take = [&](auto&& matches) -> std::optional<SWindow> {
-            for (auto it = pool.begin(); it != pool.end(); ++it)
-                if (matches(*it)) {
-                    SWindow out = std::move(*it);
-                    pool.erase(it);
-                    return out;
-                }
-            return std::nullopt;
-        };
-        const auto FREE = [&](const SWindow& entry) { return entry.address == 0 || !open.contains(entry.address); };
-        const auto KEY  = titleKey(title);
+    bool owns(const SWindow& entry, const std::string& app, uint64_t address, int64_t pid, uint64_t id) {
+        return entry.address != 0 && entry.address == address && entry.pid == pid && entry.app == app && entry.id == id;
+    }
 
-        if (auto exact = take([&](const SWindow& e) { return e.address == address && e.pid == pid && e.app == app; }))
-            return exact;
-        if (auto titled = take([&](const SWindow& e) { return e.app == app && e.title == KEY && FREE(e); }))
-            return titled;
-        return take([&](const SWindow& e) { return e.app == app && FREE(e); });
+    std::optional<SWindow> takeMatch(const std::string& app, const std::string& /*title*/, uint64_t address, int64_t pid, const std::set<uint64_t>& /*open*/,
+                                     std::vector<SWindow>& pool, uint64_t id) {
+        const auto IT = std::ranges::find_if(pool, [&](const SWindow& e) { return owns(e, app, address, pid, id); });
+        if (IT == pool.end())
+            return std::nullopt;
+        SWindow out = std::move(*IT);
+        pool.erase(IT);
+        return out;
     }
 }

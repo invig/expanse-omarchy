@@ -272,7 +272,7 @@ namespace Expanse {
         Vector2D               scrolledFor(const PHLWORKSPACE& workspace) const;
         void                   noteOriginal(PHLWINDOW window);
         void                   followWorkspaces();
-        bool                   placeFromSaved(PHLWINDOW window, bool exactOnly);
+        bool                   placeFromSaved(PHLWINDOW window);
         void                   putWindowsBack();
         void                   stopSaving();
 
@@ -410,7 +410,7 @@ namespace Expanse {
         PHLWINDOWREF                m_centreAfterResize;
         void                        centreAfterResize(const PHLWORKSPACE& workspace);
         void                        noteScreen(const PHLWORKSPACE& workspace, const CBox& screen);
-        std::vector<Store::SWindow> m_pool; // saved spots of windows not open now
+        std::vector<Store::SWindow> m_pool; // saved spots of open windows not on the canvas now
         std::optional<Store::SLayout> m_lastLayout;     // as last saved, kept as a snapshot before restoring another
         std::optional<int64_t>        m_lastSnapshotAt; // when the newest was taken, once read
         bool                        m_paused    = false;
@@ -418,8 +418,6 @@ namespace Expanse {
 
         std::vector<PHLWINDOWREF> m_selected;
         std::vector<PHLWINDOWREF> m_unplaced; // opened while the canvas couldn't place them
-        std::vector<PHLWINDOWREF> m_fresh;    // opened beside their app's others: new, not back from last time
-        std::unordered_map<std::string, std::chrono::steady_clock::time_point> m_appOpened; // each app's last window, when it opened
 
         // A full-screen window leaves full screen while the canvas is up
         // (Hyprland hides everything under it), and gets it back if you leave

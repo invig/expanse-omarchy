@@ -28,7 +28,7 @@ namespace Expanse {
 
     using Desktop::View::IGeometric;
 
-    constexpr size_t SAVED_CLOSED = 60; // spots kept for windows that aren't open
+    constexpr size_t SAVED_CLOSED = 60; // spots kept for open windows that aren't on the canvas
     constexpr int    SAVE_DELAY   = 1000; // ms after the last change
 
     using Renames = std::vector<std::pair<std::string, std::string>>; // old name, new name
@@ -47,11 +47,13 @@ namespace Expanse {
             state[to] = value;
     }
 
+    static bool ownedBy(const Store::SWindow& entry, const PHLWINDOW& window) {
+        return Store::owns(entry, window->m_initialClass, reinterpret_cast<uint64_t>(window.get()), window->getPID(), window->m_stableID);
+    }
+
     // A window still open (the plugin reloaded): its own entry.
     static auto exactEntry(std::vector<Store::SWindow>& pool, const PHLWINDOW& window) {
-        return std::ranges::find_if(pool, [&](const Store::SWindow& e) {
-            return e.address == reinterpret_cast<uint64_t>(window.get()) && e.pid == window->getPID() && e.app == window->m_initialClass;
-        });
+        return std::ranges::find_if(pool, [&](const Store::SWindow& e) { return ownedBy(e, window); });
     }
 
     static CBox goalBox(const PHLWINDOW& window) {
@@ -204,6 +206,7 @@ namespace Expanse {
                 .home      = original.home,
                 .address   = reinterpret_cast<uint64_t>(WINDOW.get()),
                 .pid       = WINDOW->getPID(),
+                .id        = WINDOW->m_stableID,
             });
         }
         // Workspaces in another layout keep their canvas (see enterWorkspace),
@@ -225,10 +228,12 @@ namespace Expanse {
                     .home      = entry.home,
                     .address   = reinterpret_cast<uint64_t>(WINDOW.get()),
                     .pid       = WINDOW->getPID(),
+                    .id        = WINDOW->m_stableID,
                 });
             }
         }
-        // Windows that aren't open keep their saved spots.
+        // Windows open but off the canvas (a workspace in another layout,
+        // since a reload) keep their saved spots.
         for (size_t i = 0; i < std::min(m_pool.size(), SAVED_CLOSED); ++i)
             layout.windows.push_back(m_pool[i]);
 
@@ -247,25 +252,12 @@ namespace Expanse {
         m_lastLayout = std::move(layout);
     }
 
-    bool CCanvas::placeFromSaved(PHLWINDOW window, bool exactOnly) {
-        std::set<uint64_t> open;
-        for (const auto& w : Desktop::windowState()->windows())
-            if (w != window)
-                open.insert(reinterpret_cast<uint64_t>(w.get()));
-
-        const uint64_t ADDRESS = reinterpret_cast<uint64_t>(window.get());
-        const int64_t  PID     = window->getPID();
-        std::optional<Store::SWindow> match;
-        if (exactOnly) {
-            const auto IT = exactEntry(m_pool, window);
-            if (IT != m_pool.end()) {
-                match = *IT;
-                m_pool.erase(IT);
-            }
-        } else
-            match = Store::takeMatch(window->m_initialClass, window->m_initialTitle, ADDRESS, PID, open, m_pool);
-        if (!match)
+    bool CCanvas::placeFromSaved(PHLWINDOW window) {
+        const auto IT = exactEntry(m_pool, window);
+        if (IT == m_pool.end())
             return false;
+        const Store::SWindow match = std::move(*IT);
+        m_pool.erase(IT);
 
         const auto TARGET = window->layoutTarget();
         if (!TARGET || Fullscreen::controller()->isFullscreen(window))
@@ -273,23 +265,23 @@ namespace Expanse {
 
         // Where it was before the canvas: the saved record, or what it is now.
         if (!tracked(window)) {
-            if (match->original)
-                m_originals.push_back({.window = window, .wasTiled = match->wasTiled, .box = *match->original, .workspace = window->m_workspace});
+            if (match.original)
+                m_originals.push_back({.window = window, .wasTiled = match.wasTiled, .box = *match.original, .workspace = window->m_workspace});
             else
                 noteOriginal(window);
         }
         if (auto* entry = tracked(window)) {
-            entry->preferred = match->preferred.value_or(match->frame.size());
-            entry->home      = match->home.value_or(match->frame.pos());
+            entry->preferred = match.preferred.value_or(match.frame.size());
+            entry->home      = match.home.value_or(match.frame.pos());
             entry->homeKnown = true;
-            entry->lastSized = match->frame.size();
+            entry->lastSized = match.frame.size();
         }
 
         if (!TARGET->floating())
             g_layoutManager->changeFloatingMode(TARGET);
 
         // The saved size too, and the spot relative to this workspace's scroll.
-        const CBox FRAME  = match->frame.copy().translate(-scrolledFor(window->m_workspace));
+        const CBox FRAME  = match.frame.copy().translate(-scrolledFor(window->m_workspace));
         CBox       layout = TARGET->position();
         const CBox NOW    = goalBox(window);
         layout.x          = std::round(FRAME.x + (layout.x - NOW.x));
@@ -330,7 +322,12 @@ namespace Expanse {
             m_scrolled[name] = offset;
         for (const auto& [name, size] : LAYOUT->fitted)
             m_fitted[name] = size;
-        m_pool = LAYOUT->windows;
+        // Only spots of windows open now: one saved for a window that has
+        // since gone is never given to another, whatever app id it claims.
+        m_pool.clear();
+        for (const auto& entry : LAYOUT->windows)
+            if (std::ranges::any_of(Desktop::windowState()->windows(), [&](const PHLWINDOW& window) { return ownedBy(entry, window); }))
+                m_pool.push_back(entry);
 
         // A workspace can come back under another name: unloading reloads
         // Hyprland's config, which can number a monitor's workspaces afresh.
@@ -347,15 +344,10 @@ namespace Expanse {
         rename(m_scrolled, renames);
         rename(m_fitted, renames);
 
-        // Windows still open (the plugin reloaded) find their exact entry
-        // first, so two windows of one app don't swap spots; then the rest by
-        // app and title.
-        std::vector<PHLWINDOW> rest;
+        // Windows still open (the plugin reloaded) find their own entry.
         for (const auto& window : Desktop::windowState()->windows())
-            if (onCanvasWorkspace(window) && !placeFromSaved(window, true))
-                rest.push_back(window);
-        for (const auto& window : rest)
-            placeFromSaved(window, false);
+            if (onCanvasWorkspace(window))
+                placeFromSaved(window);
 
         // Workspaces that were in another layout keep their canvas for when
         // they come back to Expanse: their windows' spots stay in the pool.
@@ -381,24 +373,18 @@ namespace Expanse {
     }
 
     void CCanvas::onWindowClose(PHLWINDOW window) {
-        const auto IT = std::ranges::find_if(m_originals, [&](const STracked& o) { return o.window.lock() == window; });
-        if (IT == m_originals.end() || !window->m_workspace)
-            return;
+        // Its saved spot goes with it: a later window can be given the same
+        // address, and the spot was this window's, not its app's.
+        const bool HAD_SPOT = std::erase_if(m_pool, [&](const Store::SWindow& e) { return ownedBy(e, window); }) > 0;
 
-        // Its spot is kept, first in line, for when the app opens it again.
-        m_pool.insert(m_pool.begin(), {
-                                          .app       = window->m_initialClass,
-                                          .title     = Store::titleKey(window->m_initialTitle),
-                                          .workspace = window->m_workspace->m_name,
-                                          .frame     = Fullscreen::controller()->isFullscreen(window) ? CBox{IT->home, IT->preferred} :
-                                                                                                           goalBox(window).translate(scrolledFor(window->m_workspace)),
-                                          .wasTiled  = IT->wasTiled,
-                                          .original  = IT->box,
-                                          .preferred = IT->preferred,
-                                          .home      = IT->home,
-                                      });
+        const auto IT = std::ranges::find_if(m_originals, [&](const STracked& o) { return o.window.lock() == window; });
+        if (IT == m_originals.end()) {
+            if (HAD_SPOT)
+                scheduleSave();
+            return;
+        }
         m_originals.erase(IT);
-        Log::info("dropped {}: closed (its spot kept for when its app opens it again)", logName(window));
+        Log::info("dropped {}: closed", logName(window));
         scheduleSave();
     }
 
